@@ -1,0 +1,17 @@
+[package]
+name = "loom-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ignore.workspace = true
+loom-core = { path = "../loom-core" }
+loom-store = { path = "../loom-store" }
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

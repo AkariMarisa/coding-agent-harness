@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.dev/schemas/tool-result.v1.json",
+  "title": "Loom Tool Result Envelope v1",
+  "description": "工具返回给模型的紧凑信封。全文落 artifact，items 只放地址与预览。",
+  "type": "object",
+  "required": ["v", "ok", "tool"],
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "const": 1,
+      "description": "协议版本；缺失时按 v1 处理。"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "tool": {
+      "type": "string",
+      "enum": [
+        "search",
+        "read",
+        "tree",
+        "glob",
+        "diff",
+        "verify",
+        "log",
+        "git",
+        "edit",
+        "write",
+        "bash",
+        "artifact"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "一行人类可读摘要，按 LOOM_LANG 本地化。"
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/item" }
+    },
+    "text": {
+      "type": "string",
+      "description": "read/artifact/log 等工具的有界正文；全文仍在 ref 指向的 artifact 中。"
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^artifacts/[A-Za-z0-9._-]+$",
+      "description": "相对 run 目录的 artifact 路径。"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "opaque 分页游标；仅在 truncated=true 时出现。"
+    },
+    "unchanged": {
+      "type": "boolean",
+      "description": "同一 run 内相同内容已返回过；此时 items 可省略。"
+    },
+    "stats": {
+      "$ref": "#/$defs/stats"
+    },
+    "budget": {
+      "$ref": "#/$defs/budget"
+    },
+    "err": {
+      "$ref": "#/$defs/error"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "ok": { "const": false } },
+        "required": ["ok"]
+      },
+      "then": { "required": ["err"] }
+    },
+    {
+      "if": {
+        "properties": { "ok": { "const": true } },
+        "required": ["ok"]
+      },
+      "then": { "not": { "required": ["err"] } }
+    }
+  ],
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["t"],
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "type": "string",
+          "enum": ["match", "file", "dir", "path", "hunk", "log", "symbol"]
+        },
+        "p": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "仓库相对路径。"
+        },
+        "b": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,64}$",
+          "description": "内容哈希（git blob 或 sha256 前缀）。"
+        },
+        "r": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "integer", "minimum": 1 },
+          "description": "1-based 闭区间行号 [start, end]。"
+        },
+        "s": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "符号名。"
+        },
+        "k": {
+          "type": "string",
+          "enum": ["def", "ref", "call", "type", "test", "doc", "config", "other"]
+        },
+        "x": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "单行预览；UTF-8 字符边界截断。"
+        },
+        "sc": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "总数/子项数/总行数，按 t 解释。"
+        },
+        "a": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "新增行数。"
+        },
+        "d": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "删除行数。"
+        },
+        "l": {
+          "type": "string",
+          "maxLength": 20,
+          "description": "语言标识，如 rust/ts/py。"
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "n": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "结果总数（不是本次返回数）。"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本信封实际 UTF-8 字节数。"
+        },
+        "tok": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "token 估算值，非精确值。"
+        },
+        "spill": {
+          "type": "boolean",
+          "description": "全文是否落 artifact。"
+        },
+        "dedupe": {
+          "type": "boolean",
+          "description": "是否命中本次 run 的去重集合。"
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": ["u", "l"],
+      "additionalProperties": false,
+      "properties": {
+        "u": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "已用字节。"
+        },
+        "l": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "限额字节。"
+        },
+        "p": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "at": {
+          "type": "string",
+          "enum": ["call", "invocation", "run"]
+        }
+      },
+      "description": "仅在用量达到 75% 后出现。"
+    },
+    "error": {
+      "type": "object",
+      "required": ["code"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "invalid_args",
+            "not_found",
+            "too_large",
+            "binary",
+            "timeout",
+            "permission",
+            "stale",
+            "stale_cursor",
+            "budget",
+            "internal"
+          ]
+        },
+        "hint": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "下一步建议，例如 read --range 1:200。"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "一行诊断；禁止 stack trace。"
+        }
+      }
+    }
+  }
+}

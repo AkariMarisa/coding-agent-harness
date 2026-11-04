@@ -1,0 +1,24 @@
+# Rust build output
+/target/
+/src/target/
+**/target/
+
+# Local tool cache (mounted into the dev container)
+/.cache/
+
+# Loom runtime state (per project, never committed)
+/.loom/
+/.worktrees/
+
+# Local env / logs / editor noise
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# OS / temporary
+*.swp
+*.tmp

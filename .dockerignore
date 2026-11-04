@@ -1,0 +1,10 @@
+.git
+.gitignore
+.loom
+.worktrees
+.cache
+target
+**/target
+doc
+schemas
+*.md
