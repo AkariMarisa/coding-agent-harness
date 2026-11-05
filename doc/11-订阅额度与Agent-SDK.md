@@ -304,7 +304,28 @@ LiteLLM 支持两种模式：
 
 ## 7. 本机验证计划
 
-当前开发机只确认有 `opencode`，未安装 `codex` / `claude`；以下步骤需要在安装官方客户端后执行。参数以本机 `--help` 为准。
+**2026-11-05 本机状态**（安装已验证，登录与 P0–P4 尚未执行）：
+
+| 客户端 | 版本 / 安装方式 | 登录状态 | 备注 |
+|---|---|---|---|
+| `codex` | 0.166.0，官方 `x86_64-unknown-linux-musl` 发布包，落在 `~/.local/bin/codex` | `Not logged in` | 支持 `codex login --device-auth`，适合无浏览器/远程环境 |
+| `claude` | 2.1.311，官方原生安装器，落在 `~/.local/bin/claude` | `loggedIn: false`，`authMethod: none` | `claude auth login` 默认走 Claude 订阅；`--console` 走 API 计费 |
+
+区域与网络：
+
+- `claude.ai/install.sh` 会重定向到 `downloads.claude.ai`；本机直连返回区域不可用页面，需经代理（如 `https_proxy=http://127.0.0.1:10809`）完成安装与登录。
+- Codex 发布包可从 GitHub 直接下载；登录端点是否可用需按实际网络验证。
+- 登录必须由账号持有人完成，Loom 不代持账号、不读取 token。
+
+登录命令（供账号持有人执行）：
+
+```bash
+# OpenAI：设备码流程，输出 URL + code
+codex login --device-auth
+
+# Anthropic：默认 Claude 订阅
+claude auth login
+```
 
 ### P0：确认订阅登录与 headless 输出
 
@@ -314,6 +335,7 @@ codex login status
 codex exec --json "print hello" > /tmp/codex-hello.json
 
 # Anthropic
+claude auth status
 claude -p --output-format json "print hello" > /tmp/claude-hello.json
 ```
 
