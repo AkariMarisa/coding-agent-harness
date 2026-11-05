@@ -70,6 +70,12 @@ agent → Headroom → LiteLLM → provider（api.openai.com / api.anthropic.com
 3. 调度器必须知道 **哪个席位、哪个窗口、当前并发**；不能只按模型 alias 轮询。
 4. 订阅额度耗尽时，**默认不能静默切到 API**，否则会产生用户没有预期的账单。
 
+额度形态还在变化：部分计划从“请求数/窗口”转向 token/credits 计量，模型 ID 也可能硬下线。因此：
+
+- 账本必须同时记原始 `usage` 字段和 Loom 自己的 `allowance_burn`，不假设额度单位稳定；
+- 模型 ID 变更/下线后必须重跑该 lane 的验收基线，不能沿用旧 `CPVT`；
+- `loom doctor --auth` 只报告账号和额度状态，不推断“还能跑多少任务”。
+
 ---
 
 ## 4. 三条可行路线
@@ -182,6 +188,8 @@ pub enum BillingMode {
 | `gateway` | `direct` / `litellm` / `headroom+litellm` |
 | `allow_api_fallback` | 额度耗尽时是否允许切 API，默认 `false` |
 
+同一 `credential_lane` 还关联一组 **模型能力位**（`thinking_mode` / `reasoning_passthrough` / `wire` / `cache_price` / `model_id` 等），定义见 [04](04-上下文与成本模型.md) §6.5。调度器按能力位过滤，不按模型名写死。
+
 ### 5.2 Adapter 能力声明
 
 adapter 应报告自己支持什么，而不是让 orchestrator 猜：
@@ -282,7 +290,9 @@ LiteLLM 支持两种模式：
 注意：
 
 - Codex 使用 Responses API；
-- Headroom 对 Codex `/v1/responses` 可能只路由、不压缩（社区已有 `msgs=0`、`transforms=none` 的报告）；
+- Headroom 另有**原生 `/v1/responses` 代理**，能否压缩与是否只转发要分别验证；社区已有 `msgs=0`、`transforms=none` 的报告；
+- LiteLLM 的 Headroom guardrail 在 `pre_call` 阶段改写 `messages`，官方列出的压缩端点只有 `/v1/chat/completions` 与 `/v1/messages`，**不覆盖 Responses**；
+- 订阅态可能需要 `requires_openai_auth`、`ChatGPT-Account-ID` 等头/字段，Headroom 是否原样保留未验证；
 - Codex 对未知模型 alias 可能发送完整工具定义，导致 prompt 从约 13.5k 涨到约 155k，**快速烧订阅额度**；必须配置模型 catalog 或使用 Codex 已知模型名；
 - 订阅端点的模型列表与公开 API 不同，不能假设 `gpt-*` 名称通用。
 
@@ -299,6 +309,32 @@ LiteLLM 支持两种模式：
 | 自建 OAuth 代理 | **拒绝** | 条款、安全、稳定性都不可接受 |
 
 **硬规则**：订阅 lane 不能静默降级到 API lane。降级必须由任务策略显式允许，并写入事件日志。
+
+### 6.4 混合 lane：订阅做决策，API 做执行
+
+对多数长任务，最省的形态不是“全链路套网关”，而是把两个平面分开：
+
+```text
+[控制面 / 决策面]
+  Codex / Claude 订阅（官方客户端直连，短稳定前缀）
+        │  TaskSpec + 验收标准
+        ▼
+[执行面]
+  廉价 API 模型 → Headroom（cache）→ LiteLLM → provider
+        │  四行回执 + 文件引用
+        ▼
+[验收面]
+  本地 verify / 廉价模型；只回结构化结果
+```
+
+规则：
+
+- 订阅 lane **不要插 LiteLLM**；Responses 的 reasoning item 和自定义工具类型翻译会丢结构；
+- 执行面才用 `Headroom → LiteLLM`，这里正是压缩和路由的主场；
+- 两平面只交换 **TaskSpec + 四行回执 + 文件引用**；执行面的 transcript 不回流控制面；
+- 控制面只保留目标、约束、决策、回执索引，不读 diff/日志全文；
+- 账本分开记 `api_equiv_usd`、`allowance_burn`、`provider_cache_discount_usd`，不混加；
+- 混合 lane 先作为 M3 的实验，不改变 v1 的“订阅直连 + API 直连”两条独立路径。
 
 ---
 
@@ -418,9 +454,9 @@ codex  → Headroom → LiteLLM → provider
 | 里程碑 | 改动 |
 |---|---|
 | **M0** | 不改；继续 API lane + goose。 |
-| **M1** | TaskSpec / ledger 增加 `auth_mode`、`billing_mode`、`credential_lane`；`loom doctor --auth` 只做状态检查。 |
+| **M1** | TaskSpec / ledger 增加 `auth_mode`、`billing_mode`、`credential_lane`、`capability`；`loom doctor --auth` 只做状态检查。 |
 | **M2** | 增加 `loom-adapter-codex`、`loom-adapter-claude`（官方 CLI，订阅 lane）；每 lane 并发信号量。 |
-| **M3** | 订阅网关实验（LiteLLM client OAuth 转发）；Headroom 只在验证通过后插入；默认关闭。 |
+| **M3** | 订阅网关实验（LiteLLM client OAuth 转发）；Headroom 只在验证通过后插入；混合 lane（订阅决策 + API 执行）作为实验；默认关闭。 |
 | **M4** | 多席位、额度感知调度、等待恢复；不做账号共享/轮换。 |
 
 明确不做：
