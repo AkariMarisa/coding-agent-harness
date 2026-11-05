@@ -4,6 +4,8 @@
 > 本文补充 [08](08-设计路线-v0.2.md) 与 [10](10-工具输出协议-v0.1.md)，不改变“进程 + 文件 + JSON + exit code”的核心契约。  
 > 结论：**订阅是一条独立的认证 / 计费 / 限流 lane，不是 API 的便宜镜像。** 不能假设它能透明穿过 Headroom / LiteLLM。
 
+> **优先级更新（2026-11-05）：后置。** 当前先用 GPT API token 跑通 API lane；M0/M1 不实现订阅，也不要求安装/登录 codex / claude。本文保留为后续设计调研，不阻塞主线。
+
 ---
 
 ## 1. 问题
@@ -97,7 +99,7 @@ loom-adapter-claude → claude -p               → Anthropic 订阅端点
 
 优点：最符合官方使用方式，端点变化由官方客户端吸收，凭证不进入 Loom。
 缺点：每个 provider 一个 adapter；usage 字段随版本变化；无法复用 LiteLLM 的统一预算。
-结论：**v1 的订阅主路径。**
+结论：**订阅可用后的主路径；当前不启用，先用 API token。**
 
 ### 4.2 路线 B：网关转发订阅（实验）
 
@@ -143,6 +145,8 @@ LiteLLM 现在支持两类订阅转发：
 ## 5. 对 Loom 协议的最小改动
 
 ### 5.1 新增维度，不新增魔法
+
+> 当前阶段只有 GPT API token，先不实现以下订阅维度；等订阅真正进入路线图时再加。API lane 用默认值即可工作。
 
 在 `TaskSpec` / adapter 配置中增加：
 
@@ -340,7 +344,7 @@ LiteLLM 支持两种模式：
 
 ## 7. 本机验证计划
 
-**2026-11-05 本机状态**（未登录，P0–P4 尚未执行）：
+**2026-11-05 本机状态**（未登录，P0–P4 全部后置；当前先用 GPT API token）：
 
 | 客户端 | 推荐安装方式 | 备注 |
 |---|---|---|
@@ -453,11 +457,11 @@ codex  → Headroom → LiteLLM → provider
 
 | 里程碑 | 改动 |
 |---|---|
-| **M0** | 不改；继续 API lane + goose。 |
-| **M1** | TaskSpec / ledger 增加 `auth_mode`、`billing_mode`、`credential_lane`、`capability`；`loom doctor --auth` 只做状态检查。 |
-| **M2** | 增加 `loom-adapter-codex`、`loom-adapter-claude`（官方 CLI，订阅 lane）；每 lane 并发信号量。 |
-| **M3** | 订阅网关实验（LiteLLM client OAuth 转发）；Headroom 只在验证通过后插入；混合 lane（订阅决策 + API 执行）作为实验；默认关闭。 |
-| **M4** | 多席位、额度感知调度、等待恢复；不做账号共享/轮换。 |
+| **M0** | 不改；继续 API token + goose，不安装/登录订阅客户端。 |
+| **M1** | 只做 API lane 的 usage/ledger/`capability`；`auth_mode`、`billing_mode`、`credential_lane` 先不落，等订阅进入路线图再加。 |
+| **M2** | 暂不做订阅 adapter；继续 API lane 的 adapter / native executor。 |
+| **M3** | 如届时确有订阅需求，再评估 `loom-adapter-codex` / `loom-adapter-claude` 和每 lane 并发信号量。 |
+| **M4** | 先完成 2 并行；订阅网关（LiteLLM OAuth 转发）、混合 lane、多席位调度都后置。 |
 
 明确不做：
 
@@ -470,6 +474,8 @@ codex  → Headroom → LiteLLM → provider
 ---
 
 ## 9. 开放问题
+
+> 以下问题都依赖订阅 lane；在订阅启用前不阻塞主线。当前先用 GPT API token。
 
 1. **OpenAI 当前是否允许第三方工具使用 Codex OAuth？** 官方 Codex CLI/SDK 明确支持 ChatGPT 登录；第三方客户端（如 OpenClaw）有实践，但官方公开条款仍需逐条确认。Loom 先只走官方客户端，降低风险。
 2. **Claude Agent SDK 的订阅政策是否还会变？** 官方文档目前明确“未经批准不允许第三方提供 claude.ai 登录/额度”，所以订阅场景用 Claude Code CLI，不用 Agent SDK。
@@ -484,12 +490,13 @@ codex  → Headroom → LiteLLM → provider
 
 ## 10. 结论
 
-1. **订阅是独立 lane**，不是 Headroom 的一个 mode，也不是 LiteLLM 的一个 alias。
-2. **v1 只走官方客户端**：Codex CLI/SDK、Claude Code CLI；不提取 OAuth token，不用 Claude Agent SDK 接订阅。
-3. **协议先加维度**：`auth_mode` / `billing_mode` / `credential_lane` / `allow_api_fallback`，成本账本区分 `api_equiv_usd` 与 `allowance_burn`。
-4. **Headroom 继续服务 API lane**；订阅 lane 默认直连，网关转发作为 P2/P3 实验。
-5. **LiteLLM 可作为实验网关**：支持 Claude 和 Codex 的客户端 OAuth 转发，但必须验证头、流式、模型 catalog 和额度账本；不要依赖它的 `$0` spend 做预算。
-6. **绝不静默 API 回退**；额度耗尽是可恢复状态，不是失败重跑。
+1. **当前主线是 API token 单 provider**：先用 GPT API token 跑通上下文、验收、账本；订阅不是前置条件。
+2. **订阅是独立 lane**，不是 Headroom 的一个 mode，也不是 LiteLLM 的一个 alias；等有账号且主线稳定后再启用。
+3. **订阅只走官方客户端**：Codex CLI/SDK、Claude Code CLI；不提取 OAuth token，不用 Claude Agent SDK 接订阅。
+4. **协议维度后置**：`auth_mode` / `billing_mode` / `credential_lane` / `allow_api_fallback` 等订阅进入路线图时再加；现在只保留 `capability` 与 API lane 账本。
+5. **Headroom 继续服务 API lane**；订阅 lane 默认直连，网关转发和混合 lane 都后置。
+6. **LiteLLM 可作为后续实验网关**：支持 Claude 和 Codex 的客户端 OAuth 转发，但必须验证头、流式、模型 catalog 和额度账本；不要依赖它的 `$0` spend 做预算。
+7. **绝不静默 API 回退**；额度耗尽是可恢复状态，不是失败重跑。
 
 一句话：**先把“认证/计费平面”建模对，再谈用订阅省钱；否则只是把不可见的额度消耗藏进日志里。**
 
