@@ -1,16 +1,26 @@
 //! Filesystem layout and persistence for `.loom/`.
 
 mod artifact;
+mod events;
+mod ledger;
 mod project;
 mod run;
 mod seen;
+mod tasks;
 mod telemetry;
 
 pub use artifact::{read_artifact, write_artifact};
+pub use events::{append_event, events_path, read_events};
+pub use ledger::{aggregate_usage, append_usage, ledger_path, read_usage};
 pub use project::{InitReport, Project};
-pub use run::Run;
+pub use run::{Run, RunMeta, RUN_META_VERSION};
 pub use seen::Seen;
-pub use telemetry::{append_event, now_ms, totals, ToolEvent, Totals};
+pub use tasks::{
+    index_path, mark_ready_tasks, missing_dependencies, read_index, read_task, read_tasks,
+    ready_tasks, register_task, replay_statuses, sync_index, task_path, task_relative_path,
+    task_status, task_statuses, tasks_dir, write_index, write_task,
+};
+pub use telemetry::{append_tool_event, now_ms, totals, ToolEvent, Totals};
 
 use sha2::{Digest, Sha256};
 

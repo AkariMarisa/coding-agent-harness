@@ -114,13 +114,19 @@ make check
 
 1. workspace + 容器化开发环境；
 2. 工具 envelope + `search`/`read`/`artifact`；
-3. telemetry 与三级预算。
+3. telemetry 与三级预算；
+4. 模型能力位 + 请求账本 + CPVT/TPVT/WPT；
+5. TaskSpec / 事件日志 / 任务索引与状态重放；
+6. Context Compiler（稳定前缀、硬预算、失败包、manifest）+ 版本化 prompt 库；
+7. 进程级 adapter 契约、mock adapter、goose/opencode preset、adapter canary；
+8. `dispatch` / `verify` / `resume` 最小闭环（mock 端到端通过）。
 
 下一步：
 
-1. 用真实仓库校准 `tool_output_ratio` / `spill_rate`；
-2. `loom init/task/dispatch/verify/status/resume/doctor` 闭环；
-3. 接 goose adapter；
-4. 记录 CPVT/TPVT/WPT 基线。
+1. 真实 goose/OpenCode adapter canary（需安装二进制）；
+2. 用真实仓库校准 `tool_output_ratio` / `spill_rate`；
+3. 锁、合并队列与 2 并行；
+4. 接 goose adapter 之外的回退路径；
+5. 记录 CPVT/TPVT/WPT 基线。
 
 **不要提前做**：embedding/向量库、MCP、跨项目知识库、自动规划、并行调度。

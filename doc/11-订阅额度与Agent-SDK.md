@@ -192,7 +192,7 @@ pub enum BillingMode {
 | `gateway` | `direct` / `litellm` / `headroom+litellm` |
 | `allow_api_fallback` | 额度耗尽时是否允许切 API，默认 `false` |
 
-同一 `credential_lane` 还关联一组 **模型能力位**（`thinking_mode` / `reasoning_passthrough` / `wire` / `cache_price` / `model_id` 等），定义见 [04](04-上下文与成本模型.md) §6.5。调度器按能力位过滤，不按模型名写死。
+同一 `credential_lane` 还关联一组 **模型能力位**（`tier` / `thinking_mode` / `reasoning_passthrough` / `wire` / 输入/缓存/输出价格 / `model_id` 等）。配置定义见 [06](06-技术选型.md) §5.6，成本口径见 [04](04-上下文与成本模型.md) §6.5。调度器按能力位过滤，不按模型名写死。
 
 ### 5.2 Adapter 能力声明
 

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.local/schema/receipt.v1.json",
+  "title": "Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "attempt",
+    "status",
+    "base_sha",
+    "head_sha",
+    "branch",
+    "verify",
+    "artifacts",
+    "tokens",
+    "decisions",
+    "blockers",
+    "next_hint",
+    "report_path"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "task_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "status": {
+      "enum": ["done", "blocked", "needs_input", "failed", "budget_exceeded"]
+    },
+    "base_sha": {"type": "string"},
+    "head_sha": {"type": "string"},
+    "branch": {"type": "string"},
+    "diffstat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {"type": "integer", "minimum": 0},
+        "insertions": {"type": "integer", "minimum": 0},
+        "deletions": {"type": "integer", "minimum": 0}
+      }
+    },
+    "verify": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "cmd", "exit", "duration_s", "log_path", "result"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "cmd": {"type": "string"},
+          "exit": {"type": "integer"},
+          "signal": {"type": "string"},
+          "duration_s": {"type": "number", "minimum": 0},
+          "timeout_s": {"type": "integer", "minimum": 1},
+          "log_path": {"type": "string", "minLength": 1},
+          "log_sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+          "git_sha": {"type": "string"},
+          "env_hash": {"type": "string"},
+          "result": {"enum": ["pass", "fail", "skip", "flaky"]}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+          "bytes": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "cached_input", "output"],
+      "properties": {
+        "input": {"type": "integer", "minimum": 0},
+        "cached_input": {"type": "integer", "minimum": 0},
+        "output": {"type": "integer", "minimum": 0},
+        "reasoning": {"type": "integer", "minimum": 0},
+        "cost_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "summary"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "summary": {"type": "string"}
+        }
+      }
+    },
+    "blockers": {"type": "array", "items": {"type": "string"}},
+    "next_hint": {"type": "string"},
+    "report_path": {"type": "string", "minLength": 1}
+  }
+}

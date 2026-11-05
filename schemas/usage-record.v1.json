@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.dev/schemas/usage-record.v1.json",
+  "title": "Loom Usage Record v1",
+  "description": "请求级账本行。追加写入 .loom/ledger/requests.jsonl；聚合结果由原始行重算。",
+  "type": "object",
+  "required": ["v", "ts_ms", "run_id", "cost_source", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "const": 1,
+      "description": "账本协议版本。"
+    },
+    "ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix 毫秒时间戳。"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "请求所属 run；缺失视为未归因。"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "请求所属任务；缺失时计入 unattributed。"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "同一任务的重试/fallback 序号；每次请求单独一行。"
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["frontier", "worker"]
+    },
+    "model_alias": {
+      "type": "string",
+      "minLength": 1,
+      "description": "配置中的模型别名，用于路由对账。"
+    },
+    "model_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "真实 provider 模型 id；不要只用别名对账。"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wire": {
+      "type": "string",
+      "enum": ["chat", "responses", "messages"],
+      "description": "请求使用的 wire protocol；决定网关/计费覆盖。"
+    },
+    "input_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "规范化输入 token 总数，包含 cached_input_tokens。"
+    },
+    "cached_input_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "命中缓存的输入 token；必须 <= input_tokens。"
+    },
+    "output_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reasoning_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "推理 token；通常包含在 output_tokens 中，仅作诊断，不重复计费。"
+    },
+    "cost_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "实际或估算成本；来源由 cost_source 标记。"
+    },
+    "cost_source": {
+      "type": "string",
+      "enum": ["provider", "pricing_table", "manual", "unknown"],
+      "description": "provider 账单优先；pricing_table 表示本地能力位估算。"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["provider", "litellm", "runtime", "headroom", "manual", "unknown"],
+      "description": "usage 数据的来源；优先级 provider > litellm > runtime > headroom。"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599,
+      "description": "HTTP/provider 状态；>= 400 计为失败请求。"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["cost_usd"] },
+      "then": {
+        "properties": {
+          "cost_source": {
+            "enum": ["provider", "pricing_table", "manual"]
+          }
+        }
+      }
+    }
+  ]
+}

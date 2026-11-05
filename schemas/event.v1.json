@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.local/schema/event.v1.json",
+  "title": "Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "ts_ms", "run_id", "type", "data"],
+  "properties": {
+    "v": {"const": 1},
+    "ts_ms": {"type": "integer", "minimum": 0},
+    "run_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "type": {
+      "enum": [
+        "run.started",
+        "goal.loaded",
+        "task.created",
+        "task.ready",
+        "task.dispatched",
+        "task.started",
+        "task.receipt",
+        "task.verify",
+        "task.passed",
+        "task.failed",
+        "task.escalated",
+        "task.merged",
+        "task.blocked",
+        "budget.warning",
+        "budget.exceeded",
+        "human.approved",
+        "human.aborted",
+        "run.finished"
+      ]
+    },
+    "attempt": {"type": "integer", "minimum": 1},
+    "parent_run_id": {"type": "string", "minLength": 1},
+    "data": {"type": "object"}
+  }
+}

@@ -323,15 +323,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
+name = "loom-adapter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "loom-core",
+ "loom-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "loom-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "loom-adapter",
+ "loom-context",
  "loom-core",
  "loom-store",
  "loom-tools",
  "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "loom-context"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "loom-core",
+ "loom-store",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

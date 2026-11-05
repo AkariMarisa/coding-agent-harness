@@ -1,0 +1,15 @@
+[package]
+name = "loom-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+loom-core = { path = "../loom-core" }
+loom-store = { path = "../loom-store" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -36,7 +36,7 @@ pub struct Totals {
     pub invocation_bytes: usize,
 }
 
-pub fn append_event(run: &Run, event: &ToolEvent) -> Result<()> {
+pub fn append_tool_event(run: &Run, event: &ToolEvent) -> Result<()> {
     fs::create_dir_all(run.logs_dir()).with_context(|| "create logs dir")?;
     let mut file = OpenOptions::new()
         .create(true)

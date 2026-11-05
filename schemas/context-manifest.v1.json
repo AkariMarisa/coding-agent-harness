@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.local/schema/context-manifest.v1.json",
+  "title": "ContextManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "goal_id",
+    "kind",
+    "prompt_role",
+    "prompt_version",
+    "total_budget_tokens",
+    "total_tokens",
+    "stable_prefix_tokens",
+    "degraded",
+    "sections",
+    "input_hashes",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "task_id": {"type": "string", "minLength": 1},
+    "goal_id": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["main", "worker", "judgment"]},
+    "prompt_role": {
+      "enum": ["orchestrator", "worker", "judgment", "review"]
+    },
+    "prompt_version": {"type": "string", "minLength": 1},
+    "total_budget_tokens": {"type": "integer", "minimum": 1},
+    "total_tokens": {"type": "integer", "minimum": 0},
+    "stable_prefix_tokens": {"type": "integer", "minimum": 0},
+    "degraded": {"type": "boolean"},
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "source", "file", "bytes", "tokens", "cap_tokens", "truncated"],
+        "properties": {
+          "name": {"type": "string"},
+          "source": {"type": "string"},
+          "file": {"type": "string"},
+          "bytes": {"type": "integer", "minimum": 0},
+          "tokens": {"type": "integer", "minimum": 0},
+          "cap_tokens": {"type": "integer", "minimum": 0},
+          "truncated": {"type": "boolean"}
+        }
+      }
+    },
+    "input_hashes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes", "tokens", "must_read"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+          "bytes": {"type": "integer", "minimum": 0},
+          "tokens": {"type": "integer", "minimum": 0},
+          "must_read": {"type": "boolean"},
+          "range": {
+            "type": "array",
+            "prefixItems": [
+              {"type": "integer", "minimum": 1},
+              {"type": "integer", "minimum": 1}
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}

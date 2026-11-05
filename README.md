@@ -11,9 +11,9 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 |---|---|
 | 设计文档 | v0.2，见 [doc/README.md](doc/README.md) |
 | 工具输出协议 | v0.1，见 [doc/10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md) |
-| Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-cli` |
-| 已实现 | `loom init`、`loom doctor`、`loom status`、`loom tool search`、`loom tool read`、`loom artifact` |
-| 未实现 | 任务图、dispatch、verify、resume、adapter |
+| Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-cli` |
+| 已实现 | `loom init/doctor/status`、`loom tool *`、`loom artifact`、`loom capability *`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`、`loom verify`、`loom resume` |
+| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、锁与合并队列、并行调度 |
 
 ## 快速开始
 
@@ -48,9 +48,11 @@ make clippy
 └── src/
     ├── Cargo.toml            # workspace
     └── crates/
-        ├── loom-core/        # 协议类型、限额、配置、token 估算
-        ├── loom-store/       # .loom 布局、artifact、telemetry、去重
+        ├── loom-core/        # 协议类型、限额、配置、TaskSpec/事件/回执
+        ├── loom-store/       # .loom 布局、事件日志、任务索引、artifact、账本
         ├── loom-tools/       # search/read/artifact 实现
+        ├── loom-context/     # Context Compiler + 版本化 prompt 库
+        ├── loom-adapter/     # 进程级 adapter 契约、mock/goose/opencode、canary
         └── loom-cli/         # loom 二进制
 ```
 

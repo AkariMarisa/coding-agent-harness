@@ -11,7 +11,10 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+loom-adapter = { path = "../loom-adapter" }
+loom-context = { path = "../loom-context" }
 loom-core = { path = "../loom-core" }
 loom-store = { path = "../loom-store" }
 loom-tools = { path = "../loom-tools" }
 serde_json.workspace = true
+sha2.workspace = true
