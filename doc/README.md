@@ -7,7 +7,7 @@
 > pi 从“主路径”降为“可选 adapter”；核心改为**独立 CLI/daemon + 进程级执行器契约**。  
 > 01–04 仍然有效；05/06 中与 08 冲突的部分，以 08 为准。
 
-> **当前优先级（2026-11-05）**：先用现有 **GPT API token** 跑通单 provider；订阅 lane（[11](11-订阅额度与Agent-SDK.md)）与混合 lane（[12](12-外部实践对照与采纳.md) §4）**后置**，不阻塞 M0/M1。DeepSeek/GLM/Kimi 等只是后续目标，不作为近期依赖。
+> **当前优先级（2026-11-05）**：前期用 **API key** 跑通 API lane；GPT、DeepSeek、Kimi、MiniMax、MiMo 等 key 可提供，先选 GPT + DeepSeek 做两档验证，其他按 A/B 逐步接。订阅 lane（[11](11-订阅额度与Agent-SDK.md)）与混合 lane（[12](12-外部实践对照与采纳.md) §4）**后置**，不阻塞 M0/M1；前期投入订阅对接不划算。
 
 ## 1. 一句话
 

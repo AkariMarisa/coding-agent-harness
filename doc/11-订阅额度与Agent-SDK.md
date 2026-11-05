@@ -4,7 +4,7 @@
 > 本文补充 [08](08-设计路线-v0.2.md) 与 [10](10-工具输出协议-v0.1.md)，不改变“进程 + 文件 + JSON + exit code”的核心契约。  
 > 结论：**订阅是一条独立的认证 / 计费 / 限流 lane，不是 API 的便宜镜像。** 不能假设它能透明穿过 Headroom / LiteLLM。
 
-> **优先级更新（2026-11-05）：后置。** 当前先用 GPT API token 跑通 API lane；M0/M1 不实现订阅，也不要求安装/登录 codex / claude。本文保留为后续设计调研，不阻塞主线。
+> **优先级更新（2026-11-05）：后置。** 当前先用 API key 跑通 API lane（GPT + DeepSeek/Kimi/MiniMax/MiMo 等 key 均可提供）；M0/M1 不实现订阅，也不要求安装/登录 codex / claude。本文保留为后续设计调研，不阻塞主线；前期投入订阅对接不划算。
 
 ---
 
@@ -99,7 +99,7 @@ loom-adapter-claude → claude -p               → Anthropic 订阅端点
 
 优点：最符合官方使用方式，端点变化由官方客户端吸收，凭证不进入 Loom。
 缺点：每个 provider 一个 adapter；usage 字段随版本变化；无法复用 LiteLLM 的统一预算。
-结论：**订阅可用后的主路径；当前不启用，先用 API token。**
+结论：**订阅可用后的主路径；当前不启用，先用 API key。**
 
 ### 4.2 路线 B：网关转发订阅（实验）
 
@@ -146,7 +146,7 @@ LiteLLM 现在支持两类订阅转发：
 
 ### 5.1 新增维度，不新增魔法
 
-> 当前阶段只有 GPT API token，先不实现以下订阅维度；等订阅真正进入路线图时再加。API lane 用默认值即可工作。
+> 当前阶段只走 API key（GPT + DeepSeek/Kimi 等），先不实现以下订阅维度；等订阅真正进入路线图时再加。API lane 用默认值即可工作。
 
 在 `TaskSpec` / adapter 配置中增加：
 
@@ -344,7 +344,7 @@ LiteLLM 支持两种模式：
 
 ## 7. 本机验证计划
 
-**2026-11-05 本机状态**（未登录，P0–P4 全部后置；当前先用 GPT API token）：
+**2026-11-05 本机状态**（未登录，P0–P4 全部后置；当前先用 API key：GPT + DeepSeek/Kimi/MiniMax/MiMo 等）：
 
 | 客户端 | 推荐安装方式 | 备注 |
 |---|---|---|
@@ -457,7 +457,7 @@ codex  → Headroom → LiteLLM → provider
 
 | 里程碑 | 改动 |
 |---|---|
-| **M0** | 不改；继续 API token + goose，不安装/登录订阅客户端。 |
+| **M0** | 不改；继续 API key + goose，不安装/登录订阅客户端。 |
 | **M1** | 只做 API lane 的 usage/ledger/`capability`；`auth_mode`、`billing_mode`、`credential_lane` 先不落，等订阅进入路线图再加。 |
 | **M2** | 暂不做订阅 adapter；继续 API lane 的 adapter / native executor。 |
 | **M3** | 如届时确有订阅需求，再评估 `loom-adapter-codex` / `loom-adapter-claude` 和每 lane 并发信号量。 |
@@ -475,7 +475,7 @@ codex  → Headroom → LiteLLM → provider
 
 ## 9. 开放问题
 
-> 以下问题都依赖订阅 lane；在订阅启用前不阻塞主线。当前先用 GPT API token。
+> 以下问题都依赖订阅 lane；在订阅启用前不阻塞主线。当前先用 API key 多 provider。
 
 1. **OpenAI 当前是否允许第三方工具使用 Codex OAuth？** 官方 Codex CLI/SDK 明确支持 ChatGPT 登录；第三方客户端（如 OpenClaw）有实践，但官方公开条款仍需逐条确认。Loom 先只走官方客户端，降低风险。
 2. **Claude Agent SDK 的订阅政策是否还会变？** 官方文档目前明确“未经批准不允许第三方提供 claude.ai 登录/额度”，所以订阅场景用 Claude Code CLI，不用 Agent SDK。
@@ -490,7 +490,7 @@ codex  → Headroom → LiteLLM → provider
 
 ## 10. 结论
 
-1. **当前主线是 API token 单 provider**：先用 GPT API token 跑通上下文、验收、账本；订阅不是前置条件。
+1. **当前主线是 API key 多 provider**：前期可用 GPT、DeepSeek、Kimi、MiniMax、MiMo 等 key，先 GPT frontier + DeepSeek worker 验证上下文、验收、账本；订阅不是前置条件。
 2. **订阅是独立 lane**，不是 Headroom 的一个 mode，也不是 LiteLLM 的一个 alias；等有账号且主线稳定后再启用。
 3. **订阅只走官方客户端**：Codex CLI/SDK、Claude Code CLI；不提取 OAuth token，不用 Claude Agent SDK 接订阅。
 4. **协议维度后置**：`auth_mode` / `billing_mode` / `credential_lane` / `allow_api_fallback` 等订阅进入路线图时再加；现在只保留 `capability` 与 API lane 账本。
