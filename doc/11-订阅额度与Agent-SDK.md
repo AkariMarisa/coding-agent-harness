@@ -304,17 +304,19 @@ LiteLLM 支持两种模式：
 
 ## 7. 本机验证计划
 
-**2026-11-05 本机状态**（安装已验证，登录与 P0–P4 尚未执行）：
+**2026-11-05 本机状态**（未登录，P0–P4 尚未执行）：
 
-| 客户端 | 版本 / 安装方式 | 登录状态 | 备注 |
-|---|---|---|---|
-| `codex` | 0.166.0，官方 `x86_64-unknown-linux-musl` 发布包，落在 `~/.local/bin/codex` | `Not logged in` | 支持 `codex login --device-auth`，适合无浏览器/远程环境 |
-| `claude` | 2.1.311，官方原生安装器，落在 `~/.local/bin/claude` | `loggedIn: false`，`authMethod: none` | `claude auth login` 默认走 Claude 订阅；`--console` 走 API 计费 |
+| 客户端 | 推荐安装方式 | 备注 |
+|---|---|---|
+| `codex` | 官方仓库：`sudo pacman -S openai-codex` | 当前仓库版本 0.166.0-1；不要再用发布包或安装脚本覆盖 `~/.local/bin`，否则会挡住系统包 |
+| `claude` | AUR：`yay -S claude-code`（或 `ya-claude-code`） | `claude-code` 固定官方二进制 sha256；`ya-claude-code` 额外按 Anthropic 签名清单校验 |
+
+说明：上一轮临时安装的官方二进制已移除；后续统一走系统包管理器，避免 `~/.local/bin` 与 `/usr/bin` 的版本漂移。
 
 区域与网络：
 
-- `claude.ai/install.sh` 会重定向到 `downloads.claude.ai`；本机直连返回区域不可用页面，需经代理（如 `https_proxy=http://127.0.0.1:10809`）完成安装与登录。
-- Codex 发布包可从 GitHub 直接下载；登录端点是否可用需按实际网络验证。
+- `claude.ai` 与 `downloads.claude.ai` 在本机直连会返回区域不可用页面；AUR 构建也要从 `downloads.claude.ai` 拉二进制，需经代理（如 `https_proxy=http://127.0.0.1:10809`）。
+- Codex 可从官方仓库直接安装；登录端点是否可用需按实际网络验证。
 - 登录必须由账号持有人完成，Loom 不代持账号、不读取 token。
 
 登录命令（供账号持有人执行）：
