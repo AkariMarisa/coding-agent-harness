@@ -141,6 +141,7 @@ pub fn status_after_event(current: TaskStatus, event: EventType) -> TaskStatus {
         EventType::RunStarted
         | EventType::GoalLoaded
         | EventType::TaskVerify
+        | EventType::TaskFallback
         | EventType::BudgetWarning
         | EventType::BudgetExceeded
         | EventType::HumanApproved
@@ -855,6 +856,21 @@ mod tests {
             assert_eq!(status, expected);
         }
         assert!(status.satisfies_dependency());
+    }
+
+    #[test]
+    fn fallback_does_not_change_status() {
+        for current in [
+            TaskStatus::Dispatched,
+            TaskStatus::Running,
+            TaskStatus::Receipt,
+        ] {
+            assert_eq!(
+                status_after_event(current, EventType::TaskFallback),
+                current,
+                "task.fallback must not move a task"
+            );
+        }
     }
 
     #[test]

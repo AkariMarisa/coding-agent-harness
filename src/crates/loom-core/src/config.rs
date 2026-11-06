@@ -143,6 +143,11 @@ alias = "frontier"
 tier = "frontier"
 model_id = "gpt-6.1-sol"
 
+[[models]]
+alias = "worker-b"
+tier = "worker"
+model_id = "deepseek-v4-flash-b"
+
 [routing]
 escalate_after_failures = 3
 max_escalations_per_task = 2
@@ -152,7 +157,7 @@ review = "frontier"
 implement = "worker"
 
 [routing.fallbacks]
-worker = ["frontier"]
+worker = ["worker-b"]
 
 [routing.cost_limits]
 worker = 0.25
@@ -167,8 +172,33 @@ frontier = 1.0
             config.routing.role_tier(crate::TaskRole::Review),
             Some(Tier::Frontier)
         );
-        assert_eq!(config.routing.fallbacks_for(Tier::Worker), ["frontier"]);
+        assert_eq!(config.routing.fallbacks_for(Tier::Worker), ["worker-b"]);
         assert_eq!(config.routing.cost_limit(Tier::Frontier), Some(1.0));
+    }
+
+    #[test]
+    fn rejects_cross_tier_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[[models]]
+alias = "worker"
+tier = "worker"
+
+[[models]]
+alias = "frontier"
+tier = "frontier"
+
+[routing.fallbacks]
+worker = ["frontier"]
+"#,
+        )
+        .expect("write");
+
+        let error = Config::load(&path).expect_err("cross-tier must fail");
+        assert!(error.to_string().contains("cross-tier"), "{error}");
     }
 
     #[test]

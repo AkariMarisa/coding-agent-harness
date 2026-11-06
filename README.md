@@ -13,7 +13,7 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | 工具输出协议 | v0.1，见 [doc/10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md) |
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
 | 已实现 | `loom init/doctor/status`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom resume` |
-| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、fallback 自动切换、锁与合并队列、并行调度。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
+| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、锁与合并队列、并行调度。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
 
 ## 快速开始
 
@@ -114,22 +114,24 @@ implement = "worker"
 docs = "worker"
 
 [routing.fallbacks]
-worker = ["worker-fallback"]
+worker = ["worker-b"]        # 必须是已配置的同层 alias；跨层会被拒绝
 
 [routing.cost_limits]
 worker = 0.25
 frontier = 1.0
 ```
 
-优先级：显式 `--model` > `[routing.roles]` 映射 > TaskSpec 自带 `tier`。升级只读取 `task.failed` 事件次数；`fallbacks` 目前只展示在路由计划与事件里，自动切换尚未实现。派发前若任务预算超过 tier 上限，或价格表估算的最坏成本超过上限，`loom dispatch` 会拒绝。
+优先级：显式 `--model` > `[routing.roles]` 映射 > TaskSpec 自带 `tier`。升级只读取 `task.failed` 事件次数。
+
+`fallbacks` 是**同层冗余**：只有可用性失败（adapter 退出码 4 或超时）才切换，`budget_exceeded` / `needs_input` / `blocked` 不切换——换模型撤销不了已经烧掉的预算。每次切换写 `task.fallback`（`run_id` 指向新 attempt 的 run，`parent_run_id` 指向失败的 run），并为新 attempt 开独立 run，receipt 与 usage 不互相覆盖；`attempt` 不变，所以不会污染升级阈值。显式 `--model` 会钉住 alias，此时 `fallback_enabled=false`，不切换。派发前若任务预算超过 tier 上限，或价格表估算的最坏成本超过上限，`loom dispatch` 会拒绝。
 
 ```bash
 loom route T-001                 # JSON：tier、模型、原因、fallback、预算、估算
 loom route T-001 --format pretty
-loom route stats                 # 按事件日志统计 worker 占比、升级次数与路由原因
+loom route stats                 # 按事件日志统计 worker 占比、升级/切换次数与路由原因
 ```
 
-`route stats` 以每个任务最后一次派发计算 worker 占比；重试计入 `dispatches`，但不重复计任务。这是 M3 退出标准里 “worker ≥50%” 的直接数据来源。
+`route stats` 以每个任务最后一次派发计算 worker 占比；重试计入 `dispatches`，但不重复计任务；`fallbacks` 是 `task.fallback` 事件数。这是 M3 退出标准里 “worker ≥50%” 的直接数据来源。
 
 ## 设计入口
 

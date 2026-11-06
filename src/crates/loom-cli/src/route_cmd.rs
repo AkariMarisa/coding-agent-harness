@@ -64,6 +64,7 @@ pub fn stats(project: &Project, format: Format) -> Result<i32> {
                 format_share(stats.dispatches.worker_share())
             );
             println!("escalated:    {}", stats.escalated);
+            println!("fallbacks:    {}", stats.fallbacks);
             if stats.reasons.is_empty() {
                 println!("reasons:      -");
             } else {
@@ -127,6 +128,7 @@ struct RouteStats {
     tasks: TierCounts,
     dispatches: TierCounts,
     escalated: u64,
+    fallbacks: u64,
     reasons: BTreeMap<String, u64>,
 }
 
@@ -136,6 +138,7 @@ impl RouteStats {
             "tasks": self.tasks.as_json(),
             "dispatches": self.dispatches.as_json(),
             "escalated": self.escalated,
+            "fallbacks": self.fallbacks,
             "reasons": self.reasons,
         })
     }
@@ -148,6 +151,10 @@ fn collect_stats(project: &Project) -> Result<RouteStats> {
     let mut latest_tier: BTreeMap<String, String> = BTreeMap::new();
 
     for event in &events {
+        if event.event_type == EventType::TaskFallback {
+            stats.fallbacks += 1;
+            continue;
+        }
         if event.event_type != EventType::TaskDispatched {
             continue;
         }
@@ -265,7 +272,15 @@ fn print_route(spec: &TaskSpec, status: TaskStatus, decision: &RouteDecision) {
         },
     );
     if !decision.fallbacks.is_empty() {
-        println!("fallback: {}", decision.fallbacks.join(", "));
+        println!(
+            "fallback: {}{}",
+            decision.fallbacks.join(", "),
+            if decision.fallback_enabled {
+                ""
+            } else {
+                " (disabled: --model pins the alias)"
+            }
+        );
     }
     println!(
         "budget:   ${:.4} task{}",
@@ -424,6 +439,17 @@ review = "frontier"
         assert_eq!(stats.escalated, 1);
         assert_eq!(stats.reasons.get("task_tier"), Some(&2));
         assert_eq!(stats.reasons.get("escalated"), Some(&1));
+
+        let fallback = loom_core::Event::new("R-2", 2, EventType::TaskFallback)
+            .task("T-1")
+            .attempt(1)
+            .data([("to".to_string(), json!("worker-b"))]);
+        loom_store::append_event(&project, &fallback).expect("append");
+        let stats = collect_stats(&project).expect("stats");
+        assert_eq!(stats.fallbacks, 1);
+        // Failover does not create another dispatch or another task.
+        assert_eq!(stats.dispatches.total(), 3);
+        assert_eq!(stats.tasks.total(), 2);
     }
 
     #[test]

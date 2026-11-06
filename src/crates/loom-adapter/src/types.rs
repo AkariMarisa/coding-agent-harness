@@ -154,3 +154,37 @@ pub struct AdapterRun {
     pub receipt: loom_core::Receipt,
     pub usage: Vec<AdapterUsageRow>,
 }
+
+impl AdapterRun {
+    /// Whether the executor itself failed, as opposed to the task failing.
+    ///
+    /// Only these outcomes are worth retrying on another model of the same
+    /// tier: exit 4 is the contract's "adapter failed" (provider 5xx, crash,
+    /// unparseable output) and a timeout is the same class of problem. Budget,
+    /// blocked and needs-input are not — a different model would not un-burn
+    /// the task budget, and retrying would double-spend it.
+    pub fn is_availability_failure(&self) -> bool {
+        availability_failure(self.exit_code, self.timed_out)
+    }
+}
+
+fn availability_failure(exit_code: i32, timed_out: bool) -> bool {
+    timed_out || exit_code == 4
+}
+
+#[cfg(test)]
+mod tests {
+    use super::availability_failure;
+
+    #[test]
+    fn only_adapter_errors_and_timeouts_are_retryable() {
+        // 0 = success, 2 = needs input/blocked, 3 = budget exceeded.
+        assert!(!availability_failure(0, false));
+        assert!(!availability_failure(2, false));
+        assert!(!availability_failure(3, false));
+        // 4 = adapter failure; a timeout reports 3 but is availability too.
+        assert!(availability_failure(4, false));
+        assert!(availability_failure(3, true));
+        assert!(availability_failure(0, true));
+    }
+}

@@ -30,6 +30,8 @@ pub enum EventType {
     TaskFailed,
     #[serde(rename = "task.escalated")]
     TaskEscalated,
+    #[serde(rename = "task.fallback")]
+    TaskFallback,
     #[serde(rename = "task.merged")]
     TaskMerged,
     #[serde(rename = "task.blocked")]
@@ -60,6 +62,7 @@ impl EventType {
             Self::TaskPassed => "task.passed",
             Self::TaskFailed => "task.failed",
             Self::TaskEscalated => "task.escalated",
+            Self::TaskFallback => "task.fallback",
             Self::TaskMerged => "task.merged",
             Self::TaskBlocked => "task.blocked",
             Self::BudgetWarning => "budget.warning",
@@ -87,6 +90,7 @@ impl FromStr for EventType {
             "task.passed" => Ok(Self::TaskPassed),
             "task.failed" => Ok(Self::TaskFailed),
             "task.escalated" => Ok(Self::TaskEscalated),
+            "task.fallback" => Ok(Self::TaskFallback),
             "task.merged" => Ok(Self::TaskMerged),
             "task.blocked" => Ok(Self::TaskBlocked),
             "budget.warning" => Ok(Self::BudgetWarning),
@@ -160,6 +164,13 @@ impl Event {
         self
     }
 
+    /// Link this event to the run it came from, e.g. a `task.fallback` that
+    /// switches away from the run recorded here.
+    pub fn parent_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.parent_run_id = Some(run_id.into());
+        self
+    }
+
     pub fn data(mut self, data: impl IntoIterator<Item = (String, Value)>) -> Self {
         self.data = data.into_iter().collect();
         self
@@ -196,6 +207,7 @@ impl Event {
                 | EventType::TaskPassed
                 | EventType::TaskFailed
                 | EventType::TaskEscalated
+                | EventType::TaskFallback
                 | EventType::TaskMerged
                 | EventType::TaskBlocked
         );
@@ -255,6 +267,7 @@ mod tests {
             "task.passed",
             "task.failed",
             "task.escalated",
+            "task.fallback",
             "task.merged",
             "task.blocked",
             "budget.warning",
@@ -279,6 +292,20 @@ mod tests {
         let mut bad = event.clone();
         bad.v = 2;
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn fallback_events_carry_task_and_parent_run() {
+        let event = Event::new("R-2", 2, EventType::TaskFallback)
+            .task("T-1")
+            .attempt(1)
+            .parent_run_id("R-1")
+            .data([("to".to_string(), serde_json::json!("worker-b"))]);
+        assert!(event.validate().is_ok());
+        assert_eq!(event.parent_run_id.as_deref(), Some("R-1"));
+
+        let no_task = Event::new("R-2", 2, EventType::TaskFallback);
+        assert!(no_task.validate().is_err());
     }
 
     #[test]

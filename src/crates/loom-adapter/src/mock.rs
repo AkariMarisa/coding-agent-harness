@@ -49,6 +49,20 @@ pub fn produce(request: &AdapterRequest, mode: MockMode) -> Result<MockOutcome> 
     fs::create_dir_all(&request.output_dir).context("create outbox")?;
     fs::create_dir_all(&request.logs_dir).context("create logs")?;
 
+    // Test hook: fail one specific alias so a smoke run can prove that
+    // failover reaches the configured fallback and succeeds there.
+    if std::env::var("LOOM_MOCK_FAIL_ALIAS")
+        .map(|alias| alias == request.model)
+        .unwrap_or(false)
+    {
+        fs::write(request.output_dir.join("final.md"), "").ok();
+        write_usage(request)?;
+        return Ok(MockOutcome {
+            exit_code: 4,
+            timed_out: false,
+        });
+    }
+
     let spec = read_task_spec(request);
     let acceptance_ids = spec
         .as_ref()

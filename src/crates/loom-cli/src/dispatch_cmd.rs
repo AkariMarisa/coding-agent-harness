@@ -35,8 +35,9 @@ pub(crate) struct Prepared {
     pub route: loom_core::RouteDecision,
 }
 
-/// Resolve the model, prepare the workspace, compile the packet, and write run
-/// metadata. Shared by `dispatch` and adapter live canaries.
+/// Gate a dispatch: pending/ready tasks, plus failed/escalated ones being
+/// retried. Failover attempts skip this gate because the task is already
+/// mid-dispatch.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare(
     project: &loom_store::Project,
@@ -48,7 +49,6 @@ pub(crate) fn prepare(
     run_id: Option<&str>,
     attempt: u32,
 ) -> Result<Prepared> {
-    let spec = read_task(project, task_id)?;
     let status = task_status(project, task_id)?;
     if !matches!(
         status,
@@ -59,6 +59,33 @@ pub(crate) fn prepare(
             status.as_str()
         );
     }
+    prepare_attempt(
+        project,
+        task_id,
+        adapter_name,
+        model,
+        timeout_s,
+        in_place,
+        run_id,
+        attempt,
+    )
+}
+
+/// Resolve the model, prepare the workspace, compile the packet, and write run
+/// metadata. One call = one attempt = one run directory, so a failover gets
+/// its own receipt and usage rows instead of overwriting the failed attempt.
+#[allow(clippy::too_many_arguments)]
+fn prepare_attempt(
+    project: &loom_store::Project,
+    task_id: &str,
+    adapter_name: &str,
+    model: Option<&str>,
+    timeout_s: Option<u64>,
+    in_place: bool,
+    run_id: Option<&str>,
+    attempt: u32,
+) -> Result<Prepared> {
+    let spec = read_task(project, task_id)?;
     let statuses: std::collections::BTreeMap<String, TaskStatus> =
         task_statuses(project)?.into_iter().collect();
     let missing = missing_dependencies(&spec, &statuses);
@@ -165,7 +192,7 @@ pub(crate) fn dispatch(
     run_id: Option<&str>,
     format: Format,
 ) -> Result<i32> {
-    let prepared = prepare(
+    let mut attempt = prepare(
         project,
         &args.task_id,
         &args.adapter,
@@ -175,149 +202,232 @@ pub(crate) fn dispatch(
         run_id,
         args.attempt,
     )?;
-    let Prepared {
-        spec,
-        run,
-        workspace,
-        request,
-        model_alias,
-        model_id,
-        route,
-    } = &prepared;
+
+    // Routing is decided once, from the first plan. Failover stays inside that
+    // tier, keeps the same attempt number, and never re-runs escalation.
+    let route = attempt.route.clone();
+    let chain: Vec<String> = if route.fallback_enabled {
+        route.fallbacks.clone()
+    } else {
+        Vec::new()
+    };
+    let mut chain_index = 0usize;
+    let mut switches: Vec<serde_json::Value> = Vec::new();
 
     if run_id.is_none() {
-        mark_ready_tasks(project, &run.id)?;
+        mark_ready_tasks(project, &attempt.run.id)?;
     }
 
-    let statuses = task_statuses(project)?;
-    let status = statuses
-        .get(&spec.task_id)
-        .copied()
-        .unwrap_or(TaskStatus::Pending);
-    if status == TaskStatus::Pending {
-        // Dependencies are verified but the ready event was not written yet.
+    {
+        let statuses = task_statuses(project)?;
+        let status = statuses
+            .get(&attempt.spec.task_id)
+            .copied()
+            .unwrap_or(TaskStatus::Pending);
+        if status == TaskStatus::Pending {
+            // Dependencies are verified but the ready event was not written yet.
+            loom_store::append_event(
+                project,
+                &loom_core::Event::new(
+                    &attempt.run.id,
+                    loom_store::now_ms(),
+                    loom_core::EventType::TaskReady,
+                )
+                .task(&attempt.spec.task_id)
+                .data([("deps_done".to_string(), json!(attempt.spec.depends_on))]),
+            )?;
+        }
+
+        if route.escalated {
+            loom_store::append_event(
+                project,
+                &loom_core::Event::new(
+                    &attempt.run.id,
+                    loom_store::now_ms(),
+                    loom_core::EventType::TaskEscalated,
+                )
+                .task(&attempt.spec.task_id)
+                .attempt(args.attempt)
+                .data([
+                    ("from_tier".to_string(), json!(attempt.spec.tier.as_str())),
+                    ("to_tier".to_string(), json!(route.tier.as_str())),
+                    ("model".to_string(), json!(route.alias)),
+                    ("reason".to_string(), json!(route.reason.as_str())),
+                ]),
+            )?;
+        }
+
         loom_store::append_event(
             project,
             &loom_core::Event::new(
-                &run.id,
+                &attempt.run.id,
                 loom_store::now_ms(),
-                loom_core::EventType::TaskReady,
+                loom_core::EventType::TaskDispatched,
             )
-            .task(&spec.task_id)
-            .data([("deps_done".to_string(), json!(spec.depends_on))]),
-        )?;
-    }
-
-    if route.escalated {
-        loom_store::append_event(
-            project,
-            &loom_core::Event::new(
-                &run.id,
-                loom_store::now_ms(),
-                loom_core::EventType::TaskEscalated,
-            )
-            .task(&spec.task_id)
+            .task(&attempt.spec.task_id)
             .attempt(args.attempt)
             .data([
-                ("from_tier".to_string(), json!(spec.tier.as_str())),
-                ("to_tier".to_string(), json!(route.tier.as_str())),
-                ("model".to_string(), json!(route.alias)),
-                ("reason".to_string(), json!(route.reason.as_str())),
+                ("tier".to_string(), json!(attempt.spec.tier.as_str())),
+                ("model".to_string(), json!(attempt.model_alias)),
+                (
+                    "route".to_string(),
+                    json!({
+                        "tier": route.tier.as_str(),
+                        "requested_tier": route.requested_tier.as_str(),
+                        "reason": route.reason.as_str(),
+                        "escalated": route.escalated,
+                        "fallbacks": route.fallbacks,
+                        "fallback_enabled": route.fallback_enabled,
+                    }),
+                ),
+                (
+                    "worktree".to_string(),
+                    json!(attempt.workspace.to_string_lossy()),
+                ),
+                (
+                    "budget".to_string(),
+                    json!({
+                        "max_input_tokens": attempt.spec.budget.max_input_tokens,
+                        "max_output_tokens": attempt.spec.budget.max_output_tokens,
+                        "max_steps": attempt.spec.budget.max_steps,
+                        "max_wall_s": attempt.spec.budget.max_wall_s,
+                        "max_cost_usd": attempt.spec.budget.max_cost_usd,
+                    }),
+                ),
+                (
+                    "packet".to_string(),
+                    json!(attempt.run.packet_path().to_string_lossy()),
+                ),
             ]),
         )?;
     }
 
-    loom_store::append_event(
-        project,
-        &loom_core::Event::new(
-            &run.id,
-            loom_store::now_ms(),
-            loom_core::EventType::TaskDispatched,
-        )
-        .task(&spec.task_id)
-        .attempt(args.attempt)
-        .data([
-            ("tier".to_string(), json!(spec.tier.as_str())),
-            ("model".to_string(), json!(model_alias)),
-            (
-                "route".to_string(),
-                json!({
-                    "tier": route.tier.as_str(),
-                    "requested_tier": route.requested_tier.as_str(),
-                    "reason": route.reason.as_str(),
-                    "escalated": route.escalated,
-                    "fallbacks": route.fallbacks,
-                }),
-            ),
-            ("worktree".to_string(), json!(workspace.to_string_lossy())),
-            (
-                "budget".to_string(),
-                json!({
-                    "max_input_tokens": spec.budget.max_input_tokens,
-                    "max_output_tokens": spec.budget.max_output_tokens,
-                    "max_steps": spec.budget.max_steps,
-                    "max_wall_s": spec.budget.max_wall_s,
-                    "max_cost_usd": spec.budget.max_cost_usd,
-                }),
-            ),
-            (
-                "packet".to_string(),
-                json!(run.packet_path().to_string_lossy()),
-            ),
-        ]),
-    )?;
-    loom_store::append_event(
-        project,
-        &loom_core::Event::new(
-            &run.id,
-            loom_store::now_ms(),
-            loom_core::EventType::TaskStarted,
-        )
-        .task(&spec.task_id)
-        .attempt(args.attempt)
-        .data([
-            ("adapter".to_string(), json!(request.adapter.as_str())),
-            ("model".to_string(), json!(model_alias)),
-        ]),
-    )?;
+    let adapter_run = loop {
+        loom_store::append_event(
+            project,
+            &loom_core::Event::new(
+                &attempt.run.id,
+                loom_store::now_ms(),
+                loom_core::EventType::TaskStarted,
+            )
+            .task(&attempt.spec.task_id)
+            .attempt(args.attempt)
+            .data([
+                (
+                    "adapter".to_string(),
+                    json!(attempt.request.adapter.as_str()),
+                ),
+                ("model".to_string(), json!(attempt.model_alias)),
+            ]),
+        )?;
 
-    let adapter_run = loom_adapter::run(request)?;
+        let run_result = loom_adapter::run(&attempt.request)?;
 
-    loom_store::append_event(
-        project,
-        &loom_core::Event::new(
-            &run.id,
-            loom_store::now_ms(),
-            loom_core::EventType::TaskReceipt,
-        )
-        .task(&spec.task_id)
-        .attempt(args.attempt)
-        .data([
-            (
-                "status".to_string(),
-                json!(adapter_run.receipt.status.as_str()),
-            ),
-            ("branch".to_string(), json!(adapter_run.receipt.branch)),
-            ("head_sha".to_string(), json!(adapter_run.receipt.head_sha)),
-            ("exit".to_string(), json!(adapter_run.exit_code)),
-            ("timed_out".to_string(), json!(adapter_run.timed_out)),
-        ]),
-    )?;
-    sync_index(project)?;
+        loom_store::append_event(
+            project,
+            &loom_core::Event::new(
+                &attempt.run.id,
+                loom_store::now_ms(),
+                loom_core::EventType::TaskReceipt,
+            )
+            .task(&attempt.spec.task_id)
+            .attempt(args.attempt)
+            .data([
+                (
+                    "status".to_string(),
+                    json!(run_result.receipt.status.as_str()),
+                ),
+                ("branch".to_string(), json!(run_result.receipt.branch)),
+                ("head_sha".to_string(), json!(run_result.receipt.head_sha)),
+                ("exit".to_string(), json!(run_result.exit_code)),
+                ("timed_out".to_string(), json!(run_result.timed_out)),
+            ]),
+        )?;
+        sync_index(project)?;
+
+        // Only executor failures are worth another model: a task that ran and
+        // failed is a verify problem, and a different alias would not fix it.
+        if !run_result.is_availability_failure() {
+            break run_result;
+        }
+        let Some(next_alias) = chain.get(chain_index).cloned() else {
+            break run_result;
+        };
+        chain_index += 1;
+
+        let reason = if run_result.timed_out {
+            "timeout"
+        } else {
+            "adapter_error"
+        };
+        let from_alias = attempt.model_alias.clone();
+        let from_run = attempt.run.id.clone();
+        let exit = run_result.exit_code;
+        let timed_out = run_result.timed_out;
+
+        let next = prepare_attempt(
+            project,
+            &args.task_id,
+            &args.adapter,
+            Some(&next_alias),
+            args.timeout_s,
+            args.in_place,
+            None,
+            args.attempt,
+        )?;
+        loom_store::append_event(
+            project,
+            &loom_core::Event::new(
+                &next.run.id,
+                loom_store::now_ms(),
+                loom_core::EventType::TaskFallback,
+            )
+            .task(&args.task_id)
+            .attempt(args.attempt)
+            .parent_run_id(&from_run)
+            .data([
+                ("from".to_string(), json!(from_alias)),
+                ("to".to_string(), json!(next_alias)),
+                ("tier".to_string(), json!(route.tier.as_str())),
+                ("reason".to_string(), json!(reason)),
+                ("exit".to_string(), json!(exit)),
+                ("timed_out".to_string(), json!(timed_out)),
+                ("switch".to_string(), json!(switches.len() + 1)),
+            ]),
+        )?;
+        switches.push(json!({
+            "from": from_alias,
+            "to": next_alias,
+            "reason": reason,
+            "run_id": next.run.id,
+            "parent_run_id": from_run,
+            "exit": exit,
+            "timed_out": timed_out,
+        }));
+        attempt = next;
+    };
+
+    let final_run_id = attempt.run.id.clone();
+    let final_alias = attempt.model_alias.clone();
+    let final_model_id = attempt.model_id.clone();
+    let receipt_path = attempt.run.receipt_path();
+    let workspace = attempt.workspace.display().to_string();
+    let adapter_name = attempt.request.adapter.as_str();
 
     match format {
         Format::Json => {
             let payload = json!({
-                "run_id": run.id,
-                "task_id": spec.task_id,
-                "adapter": request.adapter.as_str(),
-                "model": model_alias,
-                "model_id": model_id,
+                "run_id": final_run_id,
+                "task_id": args.task_id,
+                "adapter": adapter_name,
+                "model": final_alias,
+                "model_id": final_model_id,
                 "route": route,
+                "fallbacks": switches,
                 "exit_code": adapter_run.exit_code,
                 "timed_out": adapter_run.timed_out,
                 "status": adapter_run.receipt.status.as_str(),
-                "receipt": run.receipt_path().to_string_lossy(),
+                "receipt": receipt_path.to_string_lossy(),
                 "usage_rows": adapter_run.usage.len(),
                 "tokens": {
                     "input": adapter_run.receipt.tokens.input,
@@ -331,11 +441,9 @@ pub(crate) fn dispatch(
         Format::Pretty => {
             println!(
                 "dispatched {} via {} in {}",
-                spec.task_id,
-                request.adapter.as_str(),
-                workspace.display()
+                args.task_id, adapter_name, workspace
             );
-            println!("run:      {}", run.id);
+            println!("run:      {final_run_id}");
             println!(
                 "route:    {} via {} ({}){}",
                 route.tier.as_str(),
@@ -343,6 +451,15 @@ pub(crate) fn dispatch(
                 route.reason.as_str(),
                 if route.escalated { " [escalated]" } else { "" },
             );
+            if !switches.is_empty() {
+                for switch in &switches {
+                    println!(
+                        "fallback: {} -> {} ({}) run={}",
+                        switch["from"], switch["to"], switch["reason"], switch["run_id"]
+                    );
+                }
+                println!("model:    {final_alias} (after {} switch)", switches.len());
+            }
             println!(
                 "adapter:  exit={} timed_out={}",
                 adapter_run.exit_code, adapter_run.timed_out
@@ -350,7 +467,7 @@ pub(crate) fn dispatch(
             println!(
                 "receipt:  {} ({})",
                 adapter_run.receipt.status.as_str(),
-                run.receipt_path().display()
+                receipt_path.display()
             );
             println!(
                 "usage:    {} rows, input={} cached={} output={} cost={}",

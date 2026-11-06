@@ -23,6 +23,7 @@
         "task.passed",
         "task.failed",
         "task.escalated",
+        "task.fallback",
         "task.merged",
         "task.blocked",
         "budget.warning",

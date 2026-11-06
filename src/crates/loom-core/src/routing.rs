@@ -4,7 +4,7 @@
 //! fallback, and a worker is escalated only after real verify failures. No LLM
 //! ever decides that a task "looks hard".
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,13 +49,30 @@ impl RoutingConfig {
                 .map_err(|message| format!("routing.roles.{role}: {message}"))?;
         }
         for (tier, aliases) in &self.fallbacks {
-            tier.parse::<Tier>()
+            let key = tier
+                .parse::<Tier>()
                 .map_err(|message| format!("routing.fallbacks.{tier}: {message}"))?;
+            if aliases.is_empty() {
+                return Err(format!("routing.fallbacks.{tier} must not be empty"));
+            }
+            let mut seen = HashSet::new();
             for alias in aliases {
-                if find_model(models, alias).is_none() {
+                let model = find_model(models, alias).ok_or_else(|| {
+                    format!("routing.fallbacks.{tier}: unknown model alias {alias}")
+                })?;
+                if model.tier != key {
                     return Err(format!(
-                        "routing.fallbacks.{tier}: unknown model alias {alias}"
+                        "routing.fallbacks.{tier}: {alias} is a {} model; fallbacks stay in-tier, cross-tier changes must go through escalation",
+                        model.tier.as_str()
                     ));
+                }
+                if !model.tool_loop_safe() {
+                    return Err(format!(
+                        "routing.fallbacks.{tier}: {alias} is not tool-loop-safe"
+                    ));
+                }
+                if !seen.insert(alias.as_str()) {
+                    return Err(format!("routing.fallbacks.{tier}: duplicate alias {alias}"));
                 }
             }
         }
@@ -205,6 +222,9 @@ impl RoutingConfig {
             .filter(|fallback| fallback != &alias)
             .collect();
         let tier_cost_limit_usd = self.cost_limit(tier);
+        // An explicit `--model` pins one alias: failover would silently
+        // override the operator's choice.
+        let fallback_enabled = input.explicit_model.is_none();
 
         if let Some(limit) = tier_cost_limit_usd {
             if input.budget_usd > limit {
@@ -245,6 +265,7 @@ impl RoutingConfig {
             reason,
             escalated,
             fallbacks,
+            fallback_enabled,
             budget_usd: input.budget_usd,
             tier_cost_limit_usd,
             estimated_cost_usd,
@@ -308,6 +329,10 @@ pub struct RouteDecision {
     pub reason: RouteReason,
     pub escalated: bool,
     pub fallbacks: Vec<String>,
+    /// `false` when the operator pinned `--model`; dispatch then never fails
+    /// over to `fallbacks`.
+    #[serde(default)]
+    pub fallback_enabled: bool,
     pub budget_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tier_cost_limit_usd: Option<f64>,
@@ -473,5 +498,55 @@ mod tests {
         let mut routing = RoutingConfig::default();
         routing.cost_limits.insert("worker".into(), -1.0);
         assert!(routing.validate(&models()).is_err());
+    }
+
+    #[test]
+    fn rejects_cross_tier_and_duplicate_fallbacks() {
+        let mut routing = RoutingConfig::default();
+        routing
+            .fallbacks
+            .insert("worker".into(), vec!["frontier".into()]);
+        let error = routing.validate(&models()).expect_err("cross-tier");
+        assert!(error.contains("cross-tier"), "{error}");
+
+        let mut routing = RoutingConfig::default();
+        routing
+            .fallbacks
+            .insert("worker".into(), vec!["worker".into(), "worker".into()]);
+        let error = routing.validate(&models()).expect_err("duplicate");
+        assert!(error.contains("duplicate alias worker"), "{error}");
+
+        let mut routing = RoutingConfig::default();
+        routing.fallbacks.insert("worker".into(), Vec::new());
+        assert!(routing.validate(&models()).is_err());
+    }
+
+    #[test]
+    fn explicit_model_pinning_disables_failover() {
+        let mut routing = RoutingConfig::default();
+        routing
+            .fallbacks
+            .insert("worker".into(), vec!["worker-b".into(), "worker-c".into()]);
+        let mut model_list = models();
+        model_list.push(ModelCapability::new("worker-b", Tier::Worker));
+        model_list.push(ModelCapability::new("worker-c", Tier::Worker));
+
+        let pinned = routing
+            .plan(
+                &model_list,
+                &input(TaskRole::Implement, Tier::Worker, Some("worker-b")),
+            )
+            .expect("route");
+        assert_eq!(pinned.alias, "worker-b");
+        assert!(!pinned.fallback_enabled);
+        // The list still shows what is configured; the flag says dispatch will
+        // not use it while the alias is pinned.
+        assert_eq!(pinned.fallbacks, ["worker-c"]);
+
+        let routed = routing
+            .plan(&model_list, &input(TaskRole::Implement, Tier::Worker, None))
+            .expect("route");
+        assert!(routed.fallback_enabled);
+        assert_eq!(routed.fallbacks, ["worker-b", "worker-c"]);
     }
 }
