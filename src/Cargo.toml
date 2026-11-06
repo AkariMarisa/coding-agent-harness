@@ -6,6 +6,7 @@ members = [
     "crates/loom-tools",
     "crates/loom-context",
     "crates/loom-adapter",
+    "crates/loom-native",
     "crates/loom-cli",
 ]
 

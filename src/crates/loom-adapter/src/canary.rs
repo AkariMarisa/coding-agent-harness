@@ -54,13 +54,14 @@ pub fn canary(
     request: Option<&AdapterRequest>,
 ) -> Result<CanaryReport> {
     let preset = preset(kind);
+    let available = preset.is_available();
     let mut checks = vec![check(
         "available",
-        preset.is_available(),
-        if preset.is_available() {
-            format!("{} found on PATH", preset.check_executable)
+        available,
+        if available {
+            format!("{} found", preset.resolve_executable())
         } else {
-            format!("{} not found on PATH", preset.check_executable)
+            format!("{} not found", preset.check_executable)
         },
     )];
 
@@ -168,10 +169,11 @@ fn external_checks(
     live: bool,
     request: Option<&AdapterRequest>,
 ) -> Result<()> {
-    let version = Command::new(preset.check_executable)
-        .arg("--version")
+    let (executable, version_args) = preset.version_command();
+    let version = Command::new(&executable)
+        .args(&version_args)
         .output()
-        .with_context(|| format!("run {} --version", preset.check_executable));
+        .with_context(|| format!("run {executable} --version"));
     match version {
         Ok(output) => checks.push(check(
             "version",
@@ -257,6 +259,7 @@ fn build_mock_request(dir: &Path) -> AdapterRequest {
         output_dir,
         logs_dir,
         model: "worker".to_string(),
+        model_id: "worker".to_string(),
         branch: "agent/canary".to_string(),
         timeout_s: 10,
         max_tokens: None,

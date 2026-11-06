@@ -114,6 +114,7 @@ pub(crate) fn prepare(
         output_dir: run.outbox_dir(),
         logs_dir: run.logs_dir(),
         model: model_alias.clone(),
+        model_id: model_id.clone(),
         branch: spec.workspace.branch.clone(),
         timeout_s: timeout,
         max_tokens: Some(spec.budget.max_output_tokens),

@@ -1,0 +1,22 @@
+[package]
+name = "loom-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "loom-native"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+ignore.workspace = true
+loom-core = { path = "../loom-core" }
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+ureq = { version = "2", features = ["json"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -34,16 +34,20 @@ pub fn execute(request: &AdapterRequest) -> Result<ProcessOutcome> {
     let stderr =
         File::create(&stderr_path).with_context(|| format!("create {}", stderr_path.display()))?;
 
-    let mut command = Command::new(preset.executable);
+    let mut command = Command::new(preset.resolve_executable());
     command
         .args(&args)
         .current_dir(&request.worktree)
         .env("LOOM_TASK_ID", &request.task_id)
         .env("LOOM_RUN_ID", &request.run_id)
         .env("LOOM_MODEL", &request.model)
+        .env("LOOM_MODEL_ID", &request.model_id)
         .env("LOOM_PACKET_DIR", &request.packet_dir)
         .env("LOOM_OUTPUT_DIR", &request.output_dir)
+        .env("LOOM_LOGS_DIR", &request.logs_dir)
         .env("LOOM_BRANCH", &request.branch)
+        .env("LOOM_ATTEMPT", request.attempt.to_string())
+        .env("LOOM_TIMEOUT_S", request.timeout_s.to_string())
         .stdout(stdout)
         .stderr(stderr);
 
@@ -58,7 +62,7 @@ pub fn execute(request: &AdapterRequest) -> Result<ProcessOutcome> {
 
     let mut child = command
         .spawn()
-        .with_context(|| format!("spawn {} {}", preset.executable, args.join(" ")))?;
+        .with_context(|| format!("spawn {} {}", preset.resolve_executable(), args.join(" ")))?;
 
     if preset.stdin_packet {
         if let Some(mut stdin) = child.stdin.take() {

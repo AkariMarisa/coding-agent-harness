@@ -27,6 +27,14 @@ pub fn preset(kind: AdapterKind) -> AdapterPreset {
             args: &[],
             stdin_packet: false,
         },
+        AdapterKind::Native => AdapterPreset {
+            kind: AdapterKind::Native,
+            executable: "loom-native",
+            check_executable: "loom-native",
+            description: "内置 native executor（OpenAI-compatible loop，可脚本化测试）",
+            args: &[],
+            stdin_packet: false,
+        },
         AdapterKind::Goose => AdapterPreset {
             kind: AdapterKind::Goose,
             executable: "goose",
@@ -56,6 +64,7 @@ pub fn preset(kind: AdapterKind) -> AdapterPreset {
 pub fn list() -> Vec<AdapterPreset> {
     vec![
         preset(AdapterKind::Mock),
+        preset(AdapterKind::Native),
         preset(AdapterKind::Goose),
         preset(AdapterKind::Opencode),
     ]
@@ -86,11 +95,37 @@ impl AdapterPreset {
         if self.kind == AdapterKind::Mock {
             return true;
         }
-        which(self.check_executable).is_some()
+        let executable = self.resolve_executable();
+        if executable.contains('/') {
+            return Path::new(&executable).is_file();
+        }
+        which(&executable).is_some()
     }
 
-    pub fn version_command(&self) -> (&'static str, Vec<String>) {
-        (self.check_executable, vec!["--version".to_string()])
+    /// Resolve the executable, allowing the native executor to live beside the
+    /// `loom` binary during development.
+    pub fn resolve_executable(&self) -> String {
+        if self.kind != AdapterKind::Native {
+            return self.executable.to_string();
+        }
+        if let Ok(path) = std::env::var("LOOM_NATIVE_BIN") {
+            if !path.trim().is_empty() {
+                return path;
+            }
+        }
+        if let Ok(current) = std::env::current_exe() {
+            if let Some(parent) = current.parent() {
+                let candidate = parent.join("loom-native");
+                if candidate.is_file() {
+                    return candidate.to_string_lossy().into_owned();
+                }
+            }
+        }
+        self.executable.to_string()
+    }
+
+    pub fn version_command(&self) -> (String, Vec<String>) {
+        (self.resolve_executable(), vec!["--version".to_string()])
     }
 }
 

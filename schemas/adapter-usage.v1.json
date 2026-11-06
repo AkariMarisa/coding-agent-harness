@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.local/schema/adapter-usage.v1.json",
+  "title": "AdapterUsageRow",
+  "description": "One line of outbox/usage.jsonl written by an adapter. The control plane normalizes these rows into the request ledger.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "run_id", "task_id"],
+  "properties": {
+    "v": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "model": {"type": "string"},
+    "input_tokens": {"type": "integer", "minimum": 0},
+    "cached_input_tokens": {"type": "integer", "minimum": 0},
+    "output_tokens": {"type": "integer", "minimum": 0},
+    "reasoning_tokens": {"type": "integer", "minimum": 0},
+    "cost_usd": {"type": "number", "minimum": 0},
+    "latency_ms": {"type": "integer", "minimum": 0},
+    "status": {"type": "integer", "minimum": 0, "maximum": 599},
+    "source": {"type": "string"}
+  }
+}

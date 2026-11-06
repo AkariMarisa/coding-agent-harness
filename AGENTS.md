@@ -42,6 +42,9 @@ src/
     ├── loom-core       # 纯类型/常量/配置/估算；尽量不做 IO
     ├── loom-store      # .loom 文件布局、artifact、telemetry、去重
     ├── loom-tools      # search/read/artifact 等工具逻辑
+    ├── loom-context    # Context Compiler + 版本化 prompt 库
+    ├── loom-adapter    # 进程级 adapter 契约、mock/native/goose/opencode、canary
+    ├── loom-native     # native executor：工具循环、结果投影、预算、no-progress
     └── loom-cli        # clap 命令与输出格式化
 ```
 
@@ -119,14 +122,15 @@ make check
 5. TaskSpec / 事件日志 / 任务索引与状态重放；
 6. Context Compiler（稳定前缀、硬预算、失败包、manifest）+ 版本化 prompt 库；
 7. 进程级 adapter 契约、mock adapter、goose/opencode preset、adapter canary；
-8. `dispatch` / `verify` / `resume` 最小闭环（mock 端到端通过）。
+8. `dispatch` / `verify` / `resume` 最小闭环（mock 端到端通过）；
+9. native executor（M2 起步）：OpenAI-compatible 工具循环、read/search/edit/write/bash、结果投影到 artifact、token/墙钟/步数预算、no-progress、脚本化 provider 测试、`--adapter native` 端到端通过。
 
 下一步：
 
 1. 真实 goose/OpenCode adapter canary（需安装二进制）；
-2. 用真实仓库校准 `tool_output_ratio` / `spill_rate`；
-3. 锁、合并队列与 2 并行；
-4. 接 goose adapter 之外的回退路径；
+2. native vs adapter A/B（同任务集，按 CPVT/TPVT/墙钟）；
+3. 用真实仓库校准 `tool_output_ratio` / `spill_rate`；
+4. 锁、合并队列与 2 并行；
 5. 记录 CPVT/TPVT/WPT 基线。
 
 **已设计待实现**：多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。

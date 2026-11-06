@@ -9,6 +9,8 @@
 # Loom runtime state (per project, never committed)
 /.loom/
 /.worktrees/
+/.smoke/
+/.smoke-*/
 
 # Local env / logs / editor noise
 .env

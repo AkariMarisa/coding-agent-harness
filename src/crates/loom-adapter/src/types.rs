@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum AdapterKind {
     Mock,
+    Native,
     Goose,
     Opencode,
 }
@@ -17,6 +18,7 @@ impl AdapterKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Mock => "mock",
+            Self::Native => "native",
             Self::Goose => "goose",
             Self::Opencode => "opencode",
         }
@@ -29,6 +31,7 @@ impl FromStr for AdapterKind {
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         match input.trim().to_ascii_lowercase().as_str() {
             "mock" => Ok(Self::Mock),
+            "native" => Ok(Self::Native),
             "goose" => Ok(Self::Goose),
             "opencode" | "oc" => Ok(Self::Opencode),
             other => Err(format!("unknown adapter: {other}")),
@@ -47,6 +50,7 @@ pub struct AdapterRequest {
     pub output_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub model: String,
+    pub model_id: String,
     pub branch: String,
     pub timeout_s: u64,
     pub max_tokens: Option<u64>,

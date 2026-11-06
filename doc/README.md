@@ -118,6 +118,7 @@
 - 版本：v0.2（2026-11-04）
 - 依据：前序需求讨论 v0.4 + 本机实测快照 + prompt 协议实测 + 当前工具链
 - 本版重点：从“pi 插件 + 手工文件”转为“独立 CLI + 状态所有权 + 可替换 adapter”；见 [08-设计路线-v0.2.md](08-设计路线-v0.2.md)
-- M1 主体已落地：`loom task add/list/show/ready/graph`、`loom event list`、`loom context compile`、`loom prompt list/show`、`loom adapter list/canary`、`loom dispatch`、`loom verify`、`loom resume`、`loom usage ingest`；模型能力位见 [06](06-技术选型.md) §5.6，请求账本见 [03](03-核心协议.md) §12，Schema 见 [`schemas/`](../schemas/)（task-spec / event / receipt / context-manifest / usage-record）
+- M1 主体已落地：`loom task add/list/show/ready/graph`、`loom event list`、`loom context compile`、`loom prompt list/show`、`loom adapter list/canary`、`loom dispatch`、`loom verify`、`loom resume`、`loom usage ingest`；模型能力位见 [06](06-技术选型.md) §5.6，请求账本见 [03](03-核心协议.md) §12，Schema 见 [`schemas/`](../schemas/)（task-spec / event / receipt / context-manifest / usage-record / adapter-usage）
+- M2 起步：`loom-native` 独立执行器已接入 `--adapter native`，含 OpenAI-compatible 工具循环、结果投影、token/墙钟/步数预算、no-progress 与脚本化 provider；见 [08](08-设计路线-v0.2.md) §9.3
 - 待本机核实项：见 [05-实施路线.md](05-实施路线.md) 的“开放问题”和 [07-参考实现片段.md](07-参考实现片段.md) 的“兼容性清单”
 - 文档中的模型名、端口、CLI 参数均为**示例/占位**，落地前以本机 `--version`、`--help` 与官方文档为准。
