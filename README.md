@@ -3,7 +3,7 @@
 > 面向软件设计、架构与开发的 token 高效 Agent Harness  
 > 核心命题：**长任务，短上下文。**
 
-Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 worktree 中由可替换的 agent 执行，验收只认可执行命令。当前已完成 M1（上下文与账本）并开始 M2（native executor）。
+Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 worktree 中由可替换的 agent 执行，验收只认可执行命令。当前已完成 M1（上下文与账本）、M2 的 native executor 闭环，并开始 M3（确定性路由与成本护栏）；真实外部 adapter / 真实模型 A/B 仍受环境限制。
 
 ## 当前状态
 
@@ -12,8 +12,8 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | 设计文档 | v0.2，见 [doc/README.md](doc/README.md) |
 | 工具输出协议 | v0.1，见 [doc/10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md) |
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
-| 已实现 | `loom init/doctor/status`、`loom tool *`、`loom artifact`、`loom capability *`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom resume` |
-| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、锁与合并队列、并行调度 |
+| 已实现 | `loom init/doctor/status`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom resume` |
+| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、fallback 自动切换、锁与合并队列、并行调度。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
 
 ## 快速开始
 
@@ -63,6 +63,7 @@ make clippy
 # 在任意项目根目录
 loom init
 loom task add --file task.json        # 校验并登记 TaskSpec
+loom route T-001                      # 解释 role/tier、模型、预算与升级决策
 loom context compile T-001            # 编译有界上下文 packet
 loom dispatch T-001 --adapter mock    # 派发；native 需要 loom-native（workspace 内构建）
 loom verify T-001                     # 独立重跑 acceptance，写回执
@@ -97,12 +98,43 @@ LOOM_NATIVE_SCRIPT=/path/to/script.json loom dispatch T-001 --adapter native --i
 - `loom dispatch` 会读取同一任务上一 run 的失败回执与 `verify.log`，生成失败包注入 Context Compiler，下一 run 直接看到上次失败的命令与输出。
 - native 写出的 `final.md` 只是 claim，最终状态仍以 `loom verify` 为准。
 
+### 路由与升级
+
+路由是确定性的，不调用 LLM 判断任务难度。`.loom/config.toml` 可以显式配置 `role → tier`、升级阈值、fallback 和 tier 成本上限：
+
+```toml
+[routing]
+escalate_after_failures = 2      # worker 连续失败 2 次后升级
+max_escalations_per_task = 1
+
+[routing.roles]
+review = "frontier"
+judgment = "frontier"
+implement = "worker"
+docs = "worker"
+
+[routing.fallbacks]
+worker = ["worker-fallback"]
+
+[routing.cost_limits]
+worker = 0.25
+frontier = 1.0
+```
+
+优先级：显式 `--model` > `[routing.roles]` 映射 > TaskSpec 自带 `tier`。升级只读取 `task.failed` 事件次数；`fallbacks` 目前只展示在路由计划与事件里，自动切换尚未实现。派发前若任务预算超过 tier 上限，或价格表估算的最坏成本超过上限，`loom dispatch` 会拒绝。
+
+```bash
+loom route T-001                 # JSON：tier、模型、原因、fallback、预算、估算
+loom route T-001 --format pretty
+```
+
 ## 设计入口
 
 - 只看一篇：[08-设计路线-v0.2.md](doc/08-设计路线-v0.2.md)
 - 检索/知识库：[09-代码检索与知识库.md](doc/09-代码检索与知识库.md)
 - 工具协议：[10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md)
 - 多仓库工作区（设计稿）：[13-多仓库工作区与多端协同.md](doc/13-多仓库工作区与多端协同.md)
+- 当前问题与卡点：[14-当前问题与卡点.md](doc/14-当前问题与卡点.md)
 - 文档总览：[doc/README.md](doc/README.md)
 
 ## 许可

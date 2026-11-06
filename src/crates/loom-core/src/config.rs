@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::capability::find_model;
+use crate::routing::RoutingConfig;
 use crate::{Limits, ModelCapability};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +17,8 @@ pub struct Config {
     /// never invent a model or a price just to fill the ledger.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelCapability>,
+    /// Role/tier mapping, escalation, and cost guardrails.
+    pub routing: RoutingConfig,
 }
 
 impl Default for Config {
@@ -24,6 +27,7 @@ impl Default for Config {
             lang: "zh-CN".to_string(),
             tools: ToolsConfig::default(),
             models: Vec::new(),
+            routing: RoutingConfig::default(),
         }
     }
 }
@@ -74,6 +78,9 @@ impl Config {
                 )));
             }
         }
+        self.routing
+            .validate(&self.models)
+            .map_err(ConfigError::Validation)?;
         Ok(())
     }
 
@@ -115,6 +122,92 @@ mod tests {
         assert_eq!(config.lang, "zh-CN");
         assert_eq!(config.tools.limits.call_bytes, 8 * 1024);
         assert!(config.models.is_empty());
+        assert_eq!(config.routing.escalate_after_failures, 2);
+        assert_eq!(config.routing.max_escalations_per_task, 1);
+    }
+
+    #[test]
+    fn parses_routing_policy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[[models]]
+alias = "worker"
+tier = "worker"
+model_id = "deepseek-v4-flash"
+
+[[models]]
+alias = "frontier"
+tier = "frontier"
+model_id = "gpt-6.1-sol"
+
+[routing]
+escalate_after_failures = 3
+max_escalations_per_task = 2
+
+[routing.roles]
+review = "frontier"
+implement = "worker"
+
+[routing.fallbacks]
+worker = ["frontier"]
+
+[routing.cost_limits]
+worker = 0.25
+frontier = 1.0
+"#,
+        )
+        .expect("write");
+
+        let config = Config::load(&path).expect("load");
+        assert_eq!(config.routing.escalate_after_failures, 3);
+        assert_eq!(
+            config.routing.role_tier(crate::TaskRole::Review),
+            Some(Tier::Frontier)
+        );
+        assert_eq!(config.routing.fallbacks_for(Tier::Worker), ["frontier"]);
+        assert_eq!(config.routing.cost_limit(Tier::Frontier), Some(1.0));
+    }
+
+    #[test]
+    fn rejects_unknown_routing_role() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[routing.roles]\nnope = \"worker\"\n").expect("write");
+
+        let error = Config::load(&path).expect_err("unknown role must fail");
+        assert!(error.to_string().contains("routing.roles.nope"));
+    }
+
+    #[test]
+    fn rejects_unknown_fallback_alias() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[routing.fallbacks]\nworker = [\"missing\"]\n").expect("write");
+
+        let error = Config::load(&path).expect_err("unknown fallback must fail");
+        assert!(error.to_string().contains("unknown model alias missing"));
+    }
+
+    #[test]
+    fn rejects_unknown_routing_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[routing]\nescalate_after_failure = 2\n").expect("write");
+
+        let error = Config::load(&path).expect_err("typo must not be silently ignored");
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn default_config_round_trips() {
+        let text = Config::default().to_toml().expect("serialize");
+        let parsed: Config = toml::from_str(&text).expect("parse");
+        assert_eq!(parsed.lang, "zh-CN");
+        assert_eq!(parsed.routing.escalate_after_failures, 2);
+        assert_eq!(parsed.routing.max_escalations_per_task, 1);
     }
 
     #[test]

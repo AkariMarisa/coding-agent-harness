@@ -8,9 +8,10 @@
 按顺序读：
 
 1. `doc/08-设计路线-v0.2.md`（当前最高优先级设计）
-2. `doc/09-代码检索与知识库.md`（检索策略与边界）
-3. `doc/10-工具输出协议-v0.1.md`（工具 envelope 与限额）
-4. `schemas/tool-result.v1.json`（对外契约）
+2. `doc/14-当前问题与卡点.md`（现在还不能证明/不能做的事）
+3. `doc/09-代码检索与知识库.md`（检索策略与边界）
+4. `doc/10-工具输出协议-v0.1.md`（工具 envelope 与限额）
+5. `schemas/tool-result.v1.json`（对外契约）
 
 旧文档 `doc/02`–`doc/07` 仍然有效，但与 `08/09/10` 冲突时以新文档为准。
 
@@ -124,14 +125,19 @@ make check
 7. 进程级 adapter 契约、mock adapter、goose/opencode preset、adapter canary；
 8. `dispatch` / `verify` / `resume` 最小闭环（mock 端到端通过）；
 9. native executor（M2 起步）：OpenAI-compatible 工具循环、read/search/edit/write/bash、结果投影到 artifact、token/墙钟/步数/成本预算、acceptance 失败回灌、上一 run 失败包注入、no-progress、脚本化 provider 测试、`--adapter native` 端到端通过。
+10. 控制面路由（M3 起步）：`[routing]` role→tier、verify 失败升级、tier 成本护栏、派发前最坏成本检查、`loom route` 解释命令；`task.escalated` 与 `TaskDispatched.data.route` 已接线。
 
 下一步：
 
-1. 真实 goose/OpenCode adapter canary（需安装二进制）；
-2. native vs adapter A/B（同任务集，按 CPVT/TPVT/墙钟）；
-3. 用真实仓库校准 `tool_output_ratio` / `spill_rate`；
-4. 锁、合并队列与 2 并行；
-5. 记录 CPVT/TPVT/WPT 基线。
+1. 补容器镜像/挂载：goose、opencode、curl、可选 LiteLLM；
+2. 真实 goose/OpenCode adapter canary（需安装二进制）；
+3. native vs adapter A/B（同任务集，按 CPVT/TPVT/墙钟）；
+4. 用真实仓库校准 `tool_output_ratio` / `spill_rate` / 成本估算；
+5. 实现 `fallbacks` 自动切换与 `loom route stats`；
+6. 锁、合并队列与 2 并行；
+7. 记录 CPVT/TPVT/WPT 基线。
+
+当前卡点详见 `doc/14-当前问题与卡点.md`。
 
 **已设计待实现**：多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。
 

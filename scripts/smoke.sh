@@ -37,6 +37,7 @@ EOF
 
 loom task add --file /work/.smoke/task.json
 loom task list
+loom route T-20261106-001
 loom context compile T-20261106-001 --kind worker | tail -4
 loom dispatch T-20261106-001 --adapter mock --in-place
 loom verify T-20261106-001

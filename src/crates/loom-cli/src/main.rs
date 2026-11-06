@@ -24,6 +24,7 @@ mod dispatch_cmd;
 mod event_cmd;
 mod prompt_cmd;
 mod resume_cmd;
+mod route_cmd;
 mod run_util;
 mod task_cmd;
 mod usage_cmd;
@@ -79,6 +80,13 @@ enum Command {
     Capability {
         #[command(subcommand)]
         command: CapabilityCommand,
+    },
+    /// Explain the deterministic role/tier route for a task.
+    Route {
+        task_id: String,
+        /// Override with a specific model alias from .loom/config.toml.
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Manage TaskSpecs and the task index.
     Task {
@@ -419,6 +427,9 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Doctor => doctor(&project),
         Command::Status => status(&project),
         Command::Capability { command } => capability(&project, command, cli.format),
+        Command::Route { task_id, model } => {
+            route_cmd::route(&project, &task_id, model.as_deref(), cli.format)
+        }
         Command::Task { command } => {
             task_cmd::task(&project, command, cli.run.as_deref(), cli.format)
         }

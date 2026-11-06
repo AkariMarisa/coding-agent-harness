@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use loom_adapter::{AdapterKind, AdapterRequest};
 use loom_context::{compile, CompileRequest};
-use loom_core::{TaskSpec, TaskStatus, Tier};
+use loom_core::{TaskSpec, TaskStatus};
 use loom_store::{
     mark_ready_tasks, missing_dependencies, read_task, read_tasks, sync_index, task_status,
     task_statuses, Run,
@@ -11,6 +11,7 @@ use loom_store::{
 use serde_json::json;
 
 use super::context_cmd::{default_kind, default_prompt_role, load_failure_pack};
+use super::route_cmd::plan_with_config;
 use super::run_util::{find_run_for_task, git_head, new_run_id, prepare_workspace, write_run_meta};
 use super::Format;
 
@@ -31,6 +32,7 @@ pub(crate) struct Prepared {
     pub request: AdapterRequest,
     pub model_alias: String,
     pub model_id: String,
+    pub route: loom_core::RouteDecision,
 }
 
 /// Resolve the model, prepare the workspace, compile the packet, and write run
@@ -48,9 +50,12 @@ pub(crate) fn prepare(
 ) -> Result<Prepared> {
     let spec = read_task(project, task_id)?;
     let status = task_status(project, task_id)?;
-    if !matches!(status, TaskStatus::Pending | TaskStatus::Ready) {
+    if !matches!(
+        status,
+        TaskStatus::Pending | TaskStatus::Ready | TaskStatus::Failed | TaskStatus::Escalated
+    ) {
         anyhow::bail!(
-            "task {task_id} is {}; dispatch only accepts pending/ready tasks",
+            "task {task_id} is {}; dispatch only accepts pending/ready/failed/escalated tasks",
             status.as_str()
         );
     }
@@ -65,7 +70,12 @@ pub(crate) fn prepare(
     }
 
     let config = project.load_config()?;
-    let (model_alias, model_id) = resolve_model(&config, &spec, model)?;
+    let route = plan_with_config(project, &config, &spec, model)?;
+    if !route.is_dispatchable() {
+        anyhow::bail!("route for {task_id} rejected: {}", route.issues.join("; "));
+    }
+    let model_alias = route.alias.clone();
+    let model_id = route.model_id.clone();
     let model_capability = config.model(&model_alias).cloned();
     let previous_run = find_run_for_task(project, task_id, None)?;
     let failure_pack = load_failure_pack(project, task_id, &previous_run)?;
@@ -145,42 +155,8 @@ pub(crate) fn prepare(
         request,
         model_alias,
         model_id,
+        route,
     })
-}
-
-fn resolve_model(
-    config: &loom_core::Config,
-    spec: &TaskSpec,
-    model: Option<&str>,
-) -> Result<(String, String)> {
-    if let Some(alias) = model {
-        let capability = config
-            .model(alias)
-            .ok_or_else(|| super::unknown_alias(config, alias))?;
-        return Ok((
-            capability.alias.clone(),
-            capability.model_id.clone().unwrap_or_default(),
-        ));
-    }
-
-    if let Some(capability) = config
-        .models
-        .iter()
-        .find(|model| model.tier == spec.tier)
-        .or_else(|| config.models.first())
-    {
-        return Ok((
-            capability.alias.clone(),
-            capability.model_id.clone().unwrap_or_default(),
-        ));
-    }
-
-    // No model configured: keep the tier as the alias so events still record it.
-    let alias = match spec.tier {
-        Tier::Frontier => "frontier",
-        Tier::Worker => "worker",
-    };
-    Ok((alias.to_string(), String::new()))
 }
 
 pub(crate) fn dispatch(
@@ -206,6 +182,7 @@ pub(crate) fn dispatch(
         request,
         model_alias,
         model_id,
+        route,
     } = &prepared;
 
     if run_id.is_none() {
@@ -231,6 +208,25 @@ pub(crate) fn dispatch(
         )?;
     }
 
+    if route.escalated {
+        loom_store::append_event(
+            project,
+            &loom_core::Event::new(
+                &run.id,
+                loom_store::now_ms(),
+                loom_core::EventType::TaskEscalated,
+            )
+            .task(&spec.task_id)
+            .attempt(args.attempt)
+            .data([
+                ("from_tier".to_string(), json!(spec.tier.as_str())),
+                ("to_tier".to_string(), json!(route.tier.as_str())),
+                ("model".to_string(), json!(route.alias)),
+                ("reason".to_string(), json!(route.reason.as_str())),
+            ]),
+        )?;
+    }
+
     loom_store::append_event(
         project,
         &loom_core::Event::new(
@@ -243,6 +239,16 @@ pub(crate) fn dispatch(
         .data([
             ("tier".to_string(), json!(spec.tier.as_str())),
             ("model".to_string(), json!(model_alias)),
+            (
+                "route".to_string(),
+                json!({
+                    "tier": route.tier.as_str(),
+                    "requested_tier": route.requested_tier.as_str(),
+                    "reason": route.reason.as_str(),
+                    "escalated": route.escalated,
+                    "fallbacks": route.fallbacks,
+                }),
+            ),
             ("worktree".to_string(), json!(workspace.to_string_lossy())),
             (
                 "budget".to_string(),
@@ -307,6 +313,7 @@ pub(crate) fn dispatch(
                 "adapter": request.adapter.as_str(),
                 "model": model_alias,
                 "model_id": model_id,
+                "route": route,
                 "exit_code": adapter_run.exit_code,
                 "timed_out": adapter_run.timed_out,
                 "status": adapter_run.receipt.status.as_str(),
@@ -329,6 +336,13 @@ pub(crate) fn dispatch(
                 workspace.display()
             );
             println!("run:      {}", run.id);
+            println!(
+                "route:    {} via {} ({}){}",
+                route.tier.as_str(),
+                route.alias,
+                route.reason.as_str(),
+                if route.escalated { " [escalated]" } else { "" },
+            );
             println!(
                 "adapter:  exit={} timed_out={}",
                 adapter_run.exit_code, adapter_run.timed_out

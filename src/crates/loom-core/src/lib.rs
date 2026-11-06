@@ -8,6 +8,7 @@ mod envelope;
 mod event;
 mod limits;
 mod receipt;
+mod routing;
 mod task;
 mod text;
 mod time;
@@ -25,6 +26,7 @@ pub use receipt::{
     parse_four_line, ArtifactEvidence, Decision, Diffstat, FourLineReceipt, Receipt, ReceiptStatus,
     TokenTotals, VerifyClaim, VerifyEvidence, VerifyResult, RECEIPT_VERSION,
 };
+pub use routing::{RouteDecision, RouteInput, RouteReason, RoutingConfig};
 pub use task::{
     status_after_event, validate_graph, Acceptance, ContextPolicy, TaskBudget, TaskConstraints,
     TaskIndex, TaskIndexEntry, TaskInput, TaskOutput, TaskRole, TaskSpec, TaskStatus,

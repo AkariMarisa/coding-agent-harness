@@ -59,6 +59,7 @@
 | [11-订阅额度与Agent-SDK.md](11-订阅额度与Agent-SDK.md) | **调研笔记**：订阅 vs API、Codex/Claude 的 SDK/CLI 边界、网关兼容性、实现方案 | 架构/实现者 |
 | [12-外部实践对照与采纳.md](12-外部实践对照与采纳.md) | **对照笔记**：外部 harness/多模型/订阅实践，采纳并发、能力位、混合 lane、观测口径 | 架构/实现者 |
 | [13-多仓库工作区与多端协同.md](13-多仓库工作区与多端协同.md) | **设计稿（未实现）**：monorepo 对照、meta 控制面、manifest 成员仓库、同名分支聚合 worktree、跨端任务拆分 | 架构/实现者 |
+| [14-当前问题与卡点.md](14-当前问题与卡点.md) | **状态记录**：环境卡点、M2/M3 未闭环项、技术债与下一步 | 项目负责人/实现者 |
 
 **推荐阅读顺序**：README → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10。11/12 是后续调研，可最后读；13 是多仓库工作区设计稿，做多端协同时再读；如果只看一篇：**08**。
 
@@ -119,6 +120,8 @@
 - 依据：前序需求讨论 v0.4 + 本机实测快照 + prompt 协议实测 + 当前工具链
 - 本版重点：从“pi 插件 + 手工文件”转为“独立 CLI + 状态所有权 + 可替换 adapter”；见 [08-设计路线-v0.2.md](08-设计路线-v0.2.md)
 - M1 主体已落地：`loom task add/list/show/ready/graph`、`loom event list`、`loom context compile`、`loom prompt list/show`、`loom adapter list/canary`、`loom dispatch`、`loom verify`、`loom resume`、`loom usage ingest`；模型能力位见 [06](06-技术选型.md) §5.6，请求账本见 [03](03-核心协议.md) §12，Schema 见 [`schemas/`](../schemas/)（task-spec / event / receipt / context-manifest / usage-record / adapter-usage）
-- M2 起步：`loom-native` 独立执行器已接入 `--adapter native`，含 OpenAI-compatible 工具循环、结果投影、token/墙钟/步数预算、no-progress 与脚本化 provider；见 [08](08-设计路线-v0.2.md) §9.3
+- M2 起步：`loom-native` 独立执行器已接入 `--adapter native`，含 OpenAI-compatible 工具循环、结果投影、token/墙钟/步数/成本预算、acceptance 回灌、失败包注入、no-progress 与脚本化 provider；见 [08](08-设计路线-v0.2.md) §9.3
+- M3 控制面路由：`[routing]` + `loom route`，含 role→tier、verify 失败升级、tier 成本护栏与派发前估算；真实模型 A/B 与 LiteLLM canary 仍待环境；见 [08](08-设计路线-v0.2.md) §9.4
+- 当前卡点与未闭环项：见 [14-当前问题与卡点.md](14-当前问题与卡点.md)
 - 待本机核实项：见 [05-实施路线.md](05-实施路线.md) 的“开放问题”和 [07-参考实现片段.md](07-参考实现片段.md) 的“兼容性清单”
 - 文档中的模型名、端口、CLI 参数均为**示例/占位**，落地前以本机 `--version`、`--help` 与官方文档为准。
