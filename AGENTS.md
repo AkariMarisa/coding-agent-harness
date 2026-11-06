@@ -129,4 +129,6 @@ make check
 4. 接 goose adapter 之外的回退路径；
 5. 记录 CPVT/TPVT/WPT 基线。
 
-**不要提前做**：embedding/向量库、MCP、跨项目知识库、自动规划、并行调度。
+**已设计待实现**：多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。
+
+**不要提前做**：embedding/向量库、MCP、跨项目知识库、自动规划、并行调度、把成员仓库合并成 monorepo。
