@@ -10,8 +10,8 @@ use loom_store::{
 };
 use serde_json::json;
 
-use super::context_cmd::{default_kind, default_prompt_role};
-use super::run_util::{git_head, new_run_id, prepare_workspace, write_run_meta};
+use super::context_cmd::{default_kind, default_prompt_role, load_failure_pack};
+use super::run_util::{find_run_for_task, git_head, new_run_id, prepare_workspace, write_run_meta};
 use super::Format;
 
 #[derive(Debug, Clone)]
@@ -66,6 +66,9 @@ pub(crate) fn prepare(
 
     let config = project.load_config()?;
     let (model_alias, model_id) = resolve_model(&config, &spec, model)?;
+    let model_capability = config.model(&model_alias).cloned();
+    let previous_run = find_run_for_task(project, task_id, None)?;
+    let failure_pack = load_failure_pack(project, task_id, &previous_run)?;
 
     let run_id = match run_id {
         Some(run_id) => run_id.to_string(),
@@ -87,7 +90,7 @@ pub(crate) fn prepare(
         task: &spec,
         dependencies: &dependencies,
         statuses,
-        failure_pack: None,
+        failure_pack: failure_pack.as_deref(),
         kind,
         budget: None,
         prompt,
@@ -115,6 +118,7 @@ pub(crate) fn prepare(
         logs_dir: run.logs_dir(),
         model: model_alias.clone(),
         model_id: model_id.clone(),
+        model_capability,
         branch: spec.workspace.branch.clone(),
         timeout_s: timeout,
         max_tokens: Some(spec.budget.max_output_tokens),

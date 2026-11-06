@@ -123,7 +123,7 @@ make check
 6. Context Compiler（稳定前缀、硬预算、失败包、manifest）+ 版本化 prompt 库；
 7. 进程级 adapter 契约、mock adapter、goose/opencode preset、adapter canary；
 8. `dispatch` / `verify` / `resume` 最小闭环（mock 端到端通过）；
-9. native executor（M2 起步）：OpenAI-compatible 工具循环、read/search/edit/write/bash、结果投影到 artifact、token/墙钟/步数预算、no-progress、脚本化 provider 测试、`--adapter native` 端到端通过。
+9. native executor（M2 起步）：OpenAI-compatible 工具循环、read/search/edit/write/bash、结果投影到 artifact、token/墙钟/步数/成本预算、acceptance 失败回灌、上一 run 失败包注入、no-progress、脚本化 provider 测试、`--adapter native` 端到端通过。
 
 下一步：
 

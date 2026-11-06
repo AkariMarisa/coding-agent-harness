@@ -16,6 +16,7 @@
     "output_tokens": {"type": "integer", "minimum": 0},
     "reasoning_tokens": {"type": "integer", "minimum": 0},
     "cost_usd": {"type": "number", "minimum": 0},
+    "cost_source": {"enum": ["provider", "pricing_table", "manual", "unknown"]},
     "latency_ms": {"type": "integer", "minimum": 0},
     "status": {"type": "integer", "minimum": 0, "maximum": 599},
     "source": {"type": "string"}

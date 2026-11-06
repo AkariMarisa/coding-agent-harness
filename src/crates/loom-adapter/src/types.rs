@@ -51,6 +51,10 @@ pub struct AdapterRequest {
     pub logs_dir: PathBuf,
     pub model: String,
     pub model_id: String,
+    /// Capability bits and local prices for the selected model, when known.
+    /// Adapters use this for cost estimates; the control plane stays the
+    /// source of truth for routing.
+    pub model_capability: Option<loom_core::ModelCapability>,
     pub branch: String,
     pub timeout_s: u64,
     pub max_tokens: Option<u64>,
@@ -74,6 +78,9 @@ pub struct AdapterUsageRow {
     pub reasoning_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// How `cost_usd` was obtained: provider, pricing_table, manual, unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,6 +103,7 @@ impl Default for AdapterUsageRow {
             output_tokens: None,
             reasoning_tokens: None,
             cost_usd: None,
+            cost_source: None,
             latency_ms: None,
             status: None,
             source: None,

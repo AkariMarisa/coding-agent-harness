@@ -220,6 +220,7 @@ mod tests {
             logs_dir: dir.join("logs"),
             model: "worker".into(),
             model_id: "worker".into(),
+            model_capability: None,
             branch: "agent/T-20261104-001".into(),
             timeout_s: 10,
             max_tokens: None,

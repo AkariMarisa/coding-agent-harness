@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
-use loom_core::TaskSpec;
+use loom_core::{truncate_bytes, ModelCapability, TaskSpec};
 use serde_json::{json, Value};
 
 use crate::provider::{
@@ -23,7 +23,10 @@ use crate::tools::ToolBox;
 
 pub const NATIVE_VERSION: &str = "0.1.0";
 const DEFAULT_MAX_IDLE_STEPS: u32 = 6;
+const DEFAULT_MAX_VERIFY_ROUNDS: u32 = 2;
 const DEFAULT_MAX_TOKENS_PER_CALL: u64 = 8_192;
+const MAX_FAILURE_CMD_BYTES: usize = 3 * 1024;
+const MAX_FAILURE_PACKET_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct NativeRequest {
@@ -36,6 +39,7 @@ pub struct NativeRequest {
     pub logs_dir: PathBuf,
     pub model: String,
     pub model_id: String,
+    pub model_capability: Option<ModelCapability>,
     pub branch: String,
     pub timeout_s: u64,
 }
@@ -52,6 +56,14 @@ impl NativeRequest {
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| model.clone());
+        let model_capability = std::env::var("LOOM_MODEL_CAPABILITY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                serde_json::from_str::<ModelCapability>(&value)
+                    .context("parse LOOM_MODEL_CAPABILITY")
+            })
+            .transpose()?;
         Ok(Self {
             run_id: std::env::var("LOOM_RUN_ID").context("LOOM_RUN_ID is required")?,
             task_id: std::env::var("LOOM_TASK_ID").context("LOOM_TASK_ID is required")?,
@@ -65,6 +77,7 @@ impl NativeRequest {
             logs_dir,
             model,
             model_id,
+            model_capability,
             branch: std::env::var("LOOM_BRANCH").unwrap_or_else(|_| "agent/unknown".to_string()),
             timeout_s: std::env::var("LOOM_TIMEOUT_S")
                 .ok()
@@ -82,6 +95,7 @@ pub struct NativeConfig {
     pub max_wall_s: u64,
     pub max_cost_usd: f64,
     pub max_idle_steps: u32,
+    pub max_verify_rounds: u32,
     pub max_tokens_per_call: u64,
     pub temperature: f64,
     pub run_acceptance: bool,
@@ -104,6 +118,11 @@ impl NativeConfig {
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(DEFAULT_MAX_IDLE_STEPS),
+            max_verify_rounds: std::env::var("LOOM_NATIVE_MAX_VERIFY_ROUNDS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(DEFAULT_MAX_VERIFY_ROUNDS)
+                .max(1),
             max_tokens_per_call,
             temperature: std::env::var("LOOM_NATIVE_TEMPERATURE")
                 .ok()
@@ -182,6 +201,8 @@ pub fn run(
     let mut usage = Usage::default();
     let mut steps = 0u32;
     let mut idle = 0u32;
+    let mut verify_rounds = 0u32;
+    let mut verify = skip_verify(&spec);
     let mut finished: Option<Finish> = None;
 
     while steps < config.max_steps {
@@ -201,24 +222,49 @@ pub fn run(
             temperature: config.temperature,
         })?;
         let latency_ms = call_started.elapsed().as_millis() as u64;
-        usage.add(&response.usage);
-        append_usage(request, &response, latency_ms)?;
+        let mut call_usage = response.usage.clone();
+        let cost_source = apply_estimated_cost(request, &mut call_usage);
+        usage.add(&call_usage);
+        append_usage(request, &call_usage, cost_source, latency_ms)?;
 
         let ChatResponse { message, .. } = response;
         let calls = message.tool_calls.clone().unwrap_or_default();
         if calls.is_empty() {
             let summary = message.content.clone().unwrap_or_default();
-            finished = Some(Finish::done(summary));
             messages.push(message);
+            let mut claim = Finish::done(summary);
+            if config.run_acceptance {
+                let acceptance =
+                    run_acceptance(request, &spec, started.elapsed(), config.max_wall_s);
+                verify = acceptance.lines;
+                verify_rounds += 1;
+                if has_failure(&verify) {
+                    if verify_rounds < config.max_verify_rounds {
+                        idle = 0;
+                        messages.push(ChatMessage::user(failure_packet(
+                            &spec,
+                            &verify,
+                            &acceptance.details,
+                            verify_rounds,
+                        )));
+                        continue;
+                    }
+                    claim.fail(format!(
+                        "acceptance failed after {verify_rounds} round(s): {}",
+                        failed_ids(&verify)
+                    ));
+                }
+            }
+            finished = Some(claim);
             break;
         }
 
         messages.push(message);
         let mut mutated = false;
+        let mut finish_call: Option<ToolCall> = None;
         for call in &calls {
             if call.name == "finish" {
-                let finish = parse_finish(call);
-                finished = Some(finish);
+                finish_call = Some(call.clone());
                 continue;
             }
             let observation = match toolbox.execute(&call.name, &call.arguments) {
@@ -235,9 +281,37 @@ pub fn run(
             ));
         }
 
-        if finished.is_some() {
+        if let Some(call) = finish_call {
+            let mut claim = parse_finish(&call);
+            if claim.status == "done" && config.run_acceptance {
+                let acceptance =
+                    run_acceptance(request, &spec, started.elapsed(), config.max_wall_s);
+                verify = acceptance.lines;
+                verify_rounds += 1;
+                if has_failure(&verify) {
+                    let feedback =
+                        failure_packet(&spec, &verify, &acceptance.details, verify_rounds);
+                    if verify_rounds < config.max_verify_rounds {
+                        idle = 0;
+                        messages.push(ChatMessage::tool(call.id.clone(), "finish", feedback));
+                        continue;
+                    }
+                    claim.fail(format!(
+                        "acceptance failed after {verify_rounds} round(s): {}",
+                        failed_ids(&verify)
+                    ));
+                } else {
+                    messages.push(ChatMessage::tool(
+                        call.id.clone(),
+                        "finish",
+                        "acceptance passed",
+                    ));
+                }
+            }
+            finished = Some(claim);
             break;
         }
+
         if mutated {
             idle = 0;
         } else {
@@ -251,7 +325,14 @@ pub fn run(
         }
     }
 
-    let mut finish = finished.unwrap_or_else(|| Finish::budget("max_steps exhausted"));
+    let mut finish = match finished {
+        Some(finish) => finish,
+        None if has_failure(&verify) => Finish::failed(format!(
+            "max steps exhausted after failed acceptance: {}",
+            failed_ids(&verify)
+        )),
+        None => Finish::budget("max_steps exhausted"),
+    };
     if usage.input_tokens > config.max_input_tokens
         || usage.output_tokens > config.max_output_tokens
         || usage
@@ -264,23 +345,7 @@ pub fn run(
         finish = Finish::budget("wall-clock budget exceeded");
     }
 
-    let verify = if finish.status == "done" && config.run_acceptance {
-        run_acceptance(request, &spec, started.elapsed(), config.max_wall_s)
-    } else {
-        spec.acceptance
-            .iter()
-            .map(|item| VerifyLine {
-                id: item.id.clone(),
-                result: "skip".to_string(),
-                exit: -1,
-            })
-            .collect()
-    };
-    let status = if finish.status == "done" && verify.iter().any(|item| item.result == "fail") {
-        "failed"
-    } else {
-        finish.status.as_str()
-    };
+    let status = finish.status.as_str();
     let exit_code = match status {
         "done" | "failed" => 0,
         "budget_exceeded" => 3,
@@ -330,6 +395,19 @@ impl Finish {
             summary: summary.to_string(),
             report: None,
         }
+    }
+
+    fn failed(summary: String) -> Self {
+        Self {
+            status: "failed".into(),
+            summary,
+            report: None,
+        }
+    }
+
+    fn fail(&mut self, summary: String) {
+        self.status = "failed".into();
+        self.summary = summary;
     }
 }
 
@@ -503,8 +581,94 @@ fn tool_schema() -> Value {
     ])
 }
 
-fn append_usage(request: &NativeRequest, response: &ChatResponse, latency_ms: u64) -> Result<()> {
-    let usage = &response.usage;
+fn apply_estimated_cost(request: &NativeRequest, usage: &mut Usage) -> &'static str {
+    if usage.cost_usd.is_some() {
+        return "provider";
+    }
+    let Some(capability) = &request.model_capability else {
+        return "unknown";
+    };
+    match capability.estimate_cost(
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+    ) {
+        Some(cost) => {
+            usage.cost_usd = Some(cost);
+            "pricing_table"
+        }
+        None => "unknown",
+    }
+}
+
+fn skip_verify(spec: &TaskSpec) -> Vec<VerifyLine> {
+    spec.acceptance
+        .iter()
+        .map(|item| VerifyLine {
+            id: item.id.clone(),
+            result: "skip".to_string(),
+            exit: -1,
+        })
+        .collect()
+}
+
+fn has_failure(verify: &[VerifyLine]) -> bool {
+    verify.iter().any(|item| item.result == "fail")
+}
+
+fn failed_ids(verify: &[VerifyLine]) -> String {
+    verify
+        .iter()
+        .filter(|item| item.result == "fail")
+        .map(|item| item.id.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn failure_packet(
+    spec: &TaskSpec,
+    verify: &[VerifyLine],
+    details: &[AcceptanceDetail],
+    round: u32,
+) -> String {
+    let mut out = format!(
+        "Acceptance failed on round {round}. Fix the code and call finish(status=done) again. \
+         Do not repeat the same failed change.\n\n"
+    );
+    for line in verify.iter().filter(|item| item.result == "fail") {
+        let detail = details.iter().find(|detail| detail.id == line.id);
+        let cmd = detail
+            .map(|detail| detail.cmd.as_str())
+            .unwrap_or("<unknown>");
+        let expected = spec
+            .acceptance
+            .iter()
+            .find(|item| item.id == line.id)
+            .map(|item| item.expect_exit)
+            .unwrap_or(0);
+        let output = detail
+            .map(|detail| detail.output.trim_end())
+            .filter(|output| !output.is_empty())
+            .unwrap_or("(no output)");
+        let block = format!(
+            "### {}\n$ {cmd}\nexit={} expected={expected}\n{output}\n\n",
+            line.id, line.exit
+        );
+        if out.len() + block.len() > MAX_FAILURE_PACKET_BYTES {
+            out.push_str("... failure packet truncated; read the full log under .loom/runs/*/logs/verify.log\n");
+            break;
+        }
+        out.push_str(&block);
+    }
+    out
+}
+
+fn append_usage(
+    request: &NativeRequest,
+    usage: &Usage,
+    cost_source: &str,
+    latency_ms: u64,
+) -> Result<()> {
     let mut row = json!({
         "v": 1,
         "run_id": request.run_id,
@@ -514,6 +678,7 @@ fn append_usage(request: &NativeRequest, response: &ChatResponse, latency_ms: u6
         "cached_input_tokens": usage.cached_input_tokens,
         "output_tokens": usage.output_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
+        "cost_source": cost_source,
         "latency_ms": latency_ms,
         "status": 200,
         "source": "runtime",
@@ -531,12 +696,23 @@ fn append_usage(request: &NativeRequest, response: &ChatResponse, latency_ms: u6
     Ok(())
 }
 
+struct AcceptanceRun {
+    lines: Vec<VerifyLine>,
+    details: Vec<AcceptanceDetail>,
+}
+
+struct AcceptanceDetail {
+    id: String,
+    cmd: String,
+    output: String,
+}
+
 fn run_acceptance(
     request: &NativeRequest,
     spec: &TaskSpec,
     already_elapsed: Duration,
     max_wall_s: u64,
-) -> Vec<VerifyLine> {
+) -> AcceptanceRun {
     let log_path = request.logs_dir.join("verify.log");
     let mut log = match OpenOptions::new()
         .create(true)
@@ -546,26 +722,35 @@ fn run_acceptance(
     {
         Ok(file) => file,
         Err(_error) => {
-            return spec
-                .acceptance
-                .iter()
-                .map(|item| VerifyLine {
-                    id: item.id.clone(),
-                    result: "fail".to_string(),
-                    exit: -1,
-                })
-                .collect();
+            return AcceptanceRun {
+                lines: spec
+                    .acceptance
+                    .iter()
+                    .map(|item| VerifyLine {
+                        id: item.id.clone(),
+                        result: "fail".to_string(),
+                        exit: -1,
+                    })
+                    .collect(),
+                details: Vec::new(),
+            };
         }
     };
 
-    let mut results = Vec::new();
+    let mut lines = Vec::new();
+    let mut details = Vec::new();
     for item in &spec.acceptance {
         let remaining = max_wall_s.saturating_sub(already_elapsed.as_secs());
         if remaining == 0 {
-            results.push(VerifyLine {
+            lines.push(VerifyLine {
                 id: item.id.clone(),
                 result: "fail".to_string(),
                 exit: -1,
+            });
+            details.push(AcceptanceDetail {
+                id: item.id.clone(),
+                cmd: item.cmd.clone(),
+                output: "wall-clock budget exhausted before the command ran".to_string(),
             });
             continue;
         }
@@ -583,7 +768,8 @@ fn run_acceptance(
             started.elapsed().as_secs_f64(),
             text
         );
-        results.push(VerifyLine {
+        let (preview, _) = truncate_bytes(&text, MAX_FAILURE_CMD_BYTES);
+        lines.push(VerifyLine {
             id: item.id.clone(),
             result: if exit == item.expect_exit {
                 "pass".to_string()
@@ -592,8 +778,13 @@ fn run_acceptance(
             },
             exit,
         });
+        details.push(AcceptanceDetail {
+            id: item.id.clone(),
+            cmd: item.cmd.clone(),
+            output: preview.to_string(),
+        });
     }
-    results
+    AcceptanceRun { lines, details }
 }
 
 fn run_with_timeout(cmd: &str, cwd: &Path, timeout_s: u64) -> Result<(i32, String)> {
@@ -780,6 +971,7 @@ mod tests {
             logs_dir: logs,
             model: "worker".into(),
             model_id: "test-model".into(),
+            model_capability: None,
             branch: "agent/T-20261106-001".into(),
             timeout_s: 30,
         }
@@ -819,6 +1011,140 @@ mod tests {
             serde_json::from_str(usage.lines().next().expect("row")).expect("parse usage row");
         assert_eq!(row["v"], 1);
         assert!(row.get("cost_usd").is_none(), "absent cost must be omitted");
+        assert_eq!(row["cost_source"], "unknown");
+    }
+
+    #[test]
+    fn retries_after_acceptance_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let script = json!([
+            {
+                "tool_calls": [{
+                    "name": "finish",
+                    "arguments": {"status": "done", "summary": "claimed done too early"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            },
+            {
+                "tool_calls": [{
+                    "name": "write",
+                    "arguments": {"path": "src/out.txt", "content": "ok\n"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            },
+            {
+                "tool_calls": [{
+                    "name": "finish",
+                    "arguments": {"status": "done", "summary": "created out.txt"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }
+        ]);
+        let mut config = NativeConfig::from_spec(
+            &read_spec(&request.packet_dir).expect("spec"),
+            request.timeout_s,
+        );
+        config.max_verify_rounds = 2;
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, Some(config)).expect("run");
+        assert_eq!(outcome.status, "done", "{outcome:?}");
+        assert_eq!(outcome.steps, 3);
+        assert_eq!(outcome.verify[0].result, "pass");
+        assert!(request.worktree.join("src/out.txt").exists());
+    }
+
+    #[test]
+    fn fails_when_verify_rounds_are_exhausted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let script = json!([
+            {
+                "tool_calls": [{
+                    "name": "finish",
+                    "arguments": {"status": "done", "summary": "still failing"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }
+        ]);
+        let mut config = NativeConfig::from_spec(
+            &read_spec(&request.packet_dir).expect("spec"),
+            request.timeout_s,
+        );
+        config.max_verify_rounds = 1;
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, Some(config)).expect("run");
+        assert_eq!(outcome.status, "failed", "{outcome:?}");
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.verify[0].result, "fail");
+        assert!(outcome.summary.contains("acceptance failed"));
+    }
+
+    #[test]
+    fn estimates_cost_from_model_capability() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut request = request(dir.path());
+        request.model_capability = Some(ModelCapability {
+            alias: "worker".into(),
+            input_usd_per_mtok: Some(2.0),
+            cached_input_usd_per_mtok: Some(1.0),
+            output_usd_per_mtok: Some(10.0),
+            ..ModelCapability::default()
+        });
+        let script = json!([
+            {
+                "tool_calls": [{
+                    "name": "write",
+                    "arguments": {"path": "src/out.txt", "content": "ok\n"}
+                }],
+                "usage": {"input_tokens": 1000, "cached_input_tokens": 400, "output_tokens": 100}
+            },
+            {
+                "tool_calls": [{
+                    "name": "finish",
+                    "arguments": {"status": "done", "summary": "created out.txt"}
+                }],
+                "usage": {"input_tokens": 1000, "cached_input_tokens": 400, "output_tokens": 100}
+            }
+        ]);
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, None).expect("run");
+        assert_eq!(outcome.status, "done", "{outcome:?}");
+        let cost = outcome.usage.cost_usd.expect("estimated cost");
+        assert!((cost - 0.0052).abs() < 1e-9, "cost={cost}");
+        let usage = fs::read_to_string(request.output_dir.join("usage.jsonl")).expect("usage");
+        let row: Value =
+            serde_json::from_str(usage.lines().next().expect("row")).expect("parse usage row");
+        assert_eq!(row["cost_source"], "pricing_table");
+        assert!((row["cost_usd"].as_f64().unwrap() - 0.0026).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stops_when_estimated_cost_exceeds_budget() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut request = request(dir.path());
+        request.model_capability = Some(ModelCapability {
+            alias: "worker".into(),
+            input_usd_per_mtok: Some(1000.0),
+            output_usd_per_mtok: Some(1000.0),
+            ..ModelCapability::default()
+        });
+        let script = json!([{
+            "tool_calls": [{
+                "name": "write",
+                "arguments": {"path": "src/out.txt", "content": "ok\n"}
+            }],
+            "usage": {"input_tokens": 1000, "output_tokens": 100}
+        }]);
+        let mut config = NativeConfig::from_spec(
+            &read_spec(&request.packet_dir).expect("spec"),
+            request.timeout_s,
+        );
+        config.max_cost_usd = 0.0001;
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, Some(config)).expect("run");
+        assert_eq!(outcome.status, "budget_exceeded", "{outcome:?}");
+        assert_eq!(outcome.exit_code, 3);
     }
 
     #[test]

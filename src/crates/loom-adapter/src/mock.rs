@@ -224,6 +224,7 @@ fn write_usage(request: &AdapterRequest) -> Result<()> {
         output_tokens: Some(800),
         reasoning_tokens: Some(100),
         cost_usd: Some(0.002),
+        cost_source: Some("provider".to_string()),
         latency_ms: Some(1_000),
         status: Some(200),
         source: Some("runtime".to_string()),

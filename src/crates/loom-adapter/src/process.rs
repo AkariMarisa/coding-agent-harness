@@ -50,6 +50,10 @@ pub fn execute(request: &AdapterRequest) -> Result<ProcessOutcome> {
         .env("LOOM_TIMEOUT_S", request.timeout_s.to_string())
         .stdout(stdout)
         .stderr(stderr);
+    if let Some(capability) = &request.model_capability {
+        let text = serde_json::to_string(capability).context("serialize model capability")?;
+        command.env("LOOM_MODEL_CAPABILITY", text);
+    }
 
     if let Some(max_tokens) = request.max_tokens {
         command.env("LOOM_MAX_TOKENS", max_tokens.to_string());

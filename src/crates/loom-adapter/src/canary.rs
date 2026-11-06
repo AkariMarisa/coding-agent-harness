@@ -260,6 +260,7 @@ fn build_mock_request(dir: &Path) -> AdapterRequest {
         logs_dir,
         model: "worker".to_string(),
         model_id: "worker".to_string(),
+        model_capability: None,
         branch: "agent/canary".to_string(),
         timeout_s: 10,
         max_tokens: None,

@@ -90,7 +90,12 @@ loom dispatch T-001 --adapter native
 LOOM_NATIVE_SCRIPT=/path/to/script.json loom dispatch T-001 --adapter native --in-place
 ```
 
-可选环境变量：`LOOM_NATIVE_BIN`（指定二进制路径）、`LOOM_NATIVE_MAX_TOKENS`、`LOOM_NATIVE_MAX_IDLE`、`LOOM_NATIVE_TEMPERATURE`、`LOOM_NATIVE_SKIP_ACCEPTANCE`。native 写出的 `final.md` 只是 claim，最终状态仍以 `loom verify` 为准。
+可选环境变量：`LOOM_NATIVE_BIN`（指定二进制路径）、`LOOM_NATIVE_MAX_TOKENS`、`LOOM_NATIVE_MAX_IDLE`、`LOOM_NATIVE_MAX_VERIFY_ROUNDS`、`LOOM_NATIVE_TEMPERATURE`、`LOOM_NATIVE_SKIP_ACCEPTANCE`。
+
+- acceptance 在 native 内预跑；失败时把命令、退出码和截断输出回灌给模型，默认最多 2 轮（`LOOM_NATIVE_MAX_VERIFY_ROUNDS`，最小 1），轮次耗尽标记 `failed`。
+- 成本：provider 返回成本时记 `cost_source=provider`；否则用派发模型的 `ModelCapability` 价格表估算并记 `pricing_table`；价格未知则省略 `cost_usd` 并记 `unknown`。估算成本同样计入 `TaskBudget.max_cost_usd`，超限以 `budget_exceeded` / exit 3 停止。
+- `loom dispatch` 会读取同一任务上一 run 的失败回执与 `verify.log`，生成失败包注入 Context Compiler，下一 run 直接看到上次失败的命令与输出。
+- native 写出的 `final.md` 只是 claim，最终状态仍以 `loom verify` 为准。
 
 ## 设计入口
 

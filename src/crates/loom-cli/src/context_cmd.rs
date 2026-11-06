@@ -108,7 +108,7 @@ pub(crate) fn default_prompt_role(spec: &loom_core::TaskSpec) -> PromptRole {
     }
 }
 
-fn load_failure_pack(
+pub(crate) fn load_failure_pack(
     project: &loom_store::Project,
     task_id: &str,
     run_id: &str,
@@ -184,4 +184,99 @@ fn print_manifest(manifest: &ContextManifest, out_dir: &std::path::Path) {
     }
     println!("out: {}", out_dir.display());
     println!("manifest: {}", out_dir.join("manifest.json").display());
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use loom_core::{Receipt, ReceiptStatus, VerifyEvidence, VerifyResult};
+    use loom_store::Project;
+
+    use super::load_failure_pack;
+
+    fn write_receipt(root: &std::path::Path, receipt: &Receipt) {
+        let outbox = root.join(".loom/runs/R-1/outbox");
+        fs::create_dir_all(&outbox).expect("create outbox");
+        fs::write(
+            outbox.join("receipt.json"),
+            serde_json::to_string_pretty(receipt).expect("serialize receipt"),
+        )
+        .expect("write receipt");
+    }
+
+    fn failed_receipt(task_id: &str) -> Receipt {
+        let mut receipt = Receipt::new(task_id, 2);
+        receipt.status = ReceiptStatus::Failed;
+        receipt.report_path = ".loom/runs/R-1/outbox/report.md".to_string();
+        receipt.verify = vec![
+            VerifyEvidence {
+                id: "A1".to_string(),
+                cmd: "make test".to_string(),
+                exit: 1,
+                result: VerifyResult::Fail,
+                log_path: ".loom/runs/R-1/logs/verify.log".to_string(),
+                ..VerifyEvidence::default()
+            },
+            VerifyEvidence {
+                id: "A2".to_string(),
+                cmd: "make lint".to_string(),
+                exit: 0,
+                result: VerifyResult::Pass,
+                log_path: ".loom/runs/R-1/logs/verify.log".to_string(),
+                ..VerifyEvidence::default()
+            },
+        ];
+        receipt
+    }
+
+    #[test]
+    fn loads_failure_pack_from_previous_failed_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let project = Project::at(root);
+        write_receipt(root, &failed_receipt("T-1"));
+        let logs = root.join(".loom/runs/R-1/logs");
+        fs::create_dir_all(&logs).expect("create logs");
+        fs::write(logs.join("verify.log"), "A1 failed: assertion mismatch\n").expect("write log");
+
+        let pack = load_failure_pack(&project, "T-1", "R-1")
+            .expect("load")
+            .expect("some pack");
+        assert_eq!(pack.attempt, 2);
+        assert_eq!(pack.failures.len(), 1);
+        assert_eq!(pack.failures[0].id, "A1");
+        assert_eq!(pack.failures[0].cmd, "make test");
+        assert_eq!(pack.failures[0].exit, 1);
+        assert_eq!(pack.failures[0].log_path, ".loom/runs/R-1/logs/verify.log");
+        assert!(pack.log_excerpt.contains("assertion mismatch"));
+        assert_eq!(
+            pack.evidence_paths,
+            vec![".loom/runs/R-1/outbox/report.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn ignores_missing_done_and_foreign_receipts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let project = Project::at(root);
+
+        assert!(load_failure_pack(&project, "T-1", "R-1")
+            .expect("missing")
+            .is_none());
+
+        let mut done = failed_receipt("T-1");
+        done.status = ReceiptStatus::Done;
+        done.verify[0].result = VerifyResult::Pass;
+        write_receipt(root, &done);
+        assert!(load_failure_pack(&project, "T-1", "R-1")
+            .expect("done")
+            .is_none());
+
+        write_receipt(root, &failed_receipt("T-2"));
+        assert!(load_failure_pack(&project, "T-1", "R-1")
+            .expect("foreign")
+            .is_none());
+    }
 }
