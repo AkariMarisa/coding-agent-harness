@@ -56,6 +56,7 @@ loom task add --file /work/.smoke-native/task.json
 loom route T-20261106-002
 LOOM_NATIVE_SCRIPT=/work/.smoke-native/script.json loom dispatch T-20261106-002 --adapter native --in-place
 loom verify T-20261106-002
+loom route stats
 loom task show T-20261106-002
 loom event list --task T-20261106-002
 loom adapter canary native

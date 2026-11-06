@@ -81,9 +81,13 @@ enum Command {
         #[command(subcommand)]
         command: CapabilityCommand,
     },
-    /// Explain the deterministic role/tier route for a task.
+    /// Explain the deterministic route for a task, or summarize dispatch history.
+    #[command(args_conflicts_with_subcommands = true)]
     Route {
-        task_id: String,
+        #[command(subcommand)]
+        command: Option<RouteCommand>,
+        /// Task id to explain; omit when using `route stats`.
+        task_id: Option<String>,
         /// Override with a specific model alias from .loom/config.toml.
         #[arg(long)]
         model: Option<String>,
@@ -164,6 +168,12 @@ enum Command {
         #[arg(long)]
         max_lines: Option<usize>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum RouteCommand {
+    /// Summarize dispatch tiers from the event log (worker share, escalations).
+    Stats,
 }
 
 #[derive(Debug, Subcommand)]
@@ -427,9 +437,19 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Doctor => doctor(&project),
         Command::Status => status(&project),
         Command::Capability { command } => capability(&project, command, cli.format),
-        Command::Route { task_id, model } => {
-            route_cmd::route(&project, &task_id, model.as_deref(), cli.format)
-        }
+        Command::Route {
+            command,
+            task_id,
+            model,
+        } => match command {
+            Some(RouteCommand::Stats) => route_cmd::stats(&project, cli.format),
+            None => {
+                let task_id = task_id.ok_or_else(|| {
+                    anyhow!("route requires a task id, or use `loom route stats`")
+                })?;
+                route_cmd::route(&project, &task_id, model.as_deref(), cli.format)
+            }
+        },
         Command::Task { command } => {
             task_cmd::task(&project, command, cli.run.as_deref(), cli.format)
         }

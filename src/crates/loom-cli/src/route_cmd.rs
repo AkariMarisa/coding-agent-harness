@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context as _, Result};
 use loom_core::{Config, EventFilter, EventType, RouteDecision, RouteInput, TaskSpec, TaskStatus};
 use loom_store::{read_events, read_task, task_status, Project};
@@ -24,6 +26,163 @@ pub fn route(project: &Project, task_id: &str, model: Option<&str>, format: Form
     }
 
     Ok(if decision.is_dispatchable() { 0 } else { 1 })
+}
+
+/// Summarize the tier of every dispatch recorded in the event log.
+///
+/// `tasks` counts each task once using its latest dispatch, which is the number
+/// the M3 exit criterion ("worker >= 50%") talks about. `dispatches` counts
+/// retries as well and is useful for spotting escalation churn.
+pub fn stats(project: &Project, format: Format) -> Result<i32> {
+    let stats = collect_stats(project)?;
+
+    match format {
+        Format::Json => println!("{}", serde_json::to_string_pretty(&stats.as_json())?),
+        Format::Pretty => {
+            println!("tasks:");
+            println!(
+                "  total {}  worker {}  frontier {}  unknown {}",
+                stats.tasks.total(),
+                stats.tasks.worker,
+                stats.tasks.frontier,
+                stats.tasks.unknown,
+            );
+            println!(
+                "  worker share: {}",
+                format_share(stats.tasks.worker_share())
+            );
+            println!("dispatches:");
+            println!(
+                "  total {}  worker {}  frontier {}  unknown {}",
+                stats.dispatches.total(),
+                stats.dispatches.worker,
+                stats.dispatches.frontier,
+                stats.dispatches.unknown,
+            );
+            println!(
+                "  worker share: {}",
+                format_share(stats.dispatches.worker_share())
+            );
+            println!("escalated:    {}", stats.escalated);
+            if stats.reasons.is_empty() {
+                println!("reasons:      -");
+            } else {
+                let reasons = stats
+                    .reasons
+                    .iter()
+                    .map(|(reason, count)| format!("{reason}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("reasons:      {reasons}");
+            }
+        }
+    }
+
+    Ok(0)
+}
+
+fn format_share(share: Option<f64>) -> String {
+    share
+        .map(|share| format!("{:.1}%", share * 100.0))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct TierCounts {
+    worker: u64,
+    frontier: u64,
+    unknown: u64,
+}
+
+impl TierCounts {
+    fn add(&mut self, tier: &str) {
+        match tier {
+            "worker" => self.worker += 1,
+            "frontier" => self.frontier += 1,
+            _ => self.unknown += 1,
+        }
+    }
+
+    fn total(&self) -> u64 {
+        self.worker + self.frontier + self.unknown
+    }
+
+    fn worker_share(&self) -> Option<f64> {
+        (self.total() > 0).then(|| self.worker as f64 / self.total() as f64)
+    }
+
+    fn as_json(&self) -> serde_json::Value {
+        json!({
+            "total": self.total(),
+            "worker": self.worker,
+            "frontier": self.frontier,
+            "unknown": self.unknown,
+            "worker_share": self.worker_share(),
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct RouteStats {
+    tasks: TierCounts,
+    dispatches: TierCounts,
+    escalated: u64,
+    reasons: BTreeMap<String, u64>,
+}
+
+impl RouteStats {
+    fn as_json(&self) -> serde_json::Value {
+        json!({
+            "tasks": self.tasks.as_json(),
+            "dispatches": self.dispatches.as_json(),
+            "escalated": self.escalated,
+            "reasons": self.reasons,
+        })
+    }
+}
+
+fn collect_stats(project: &Project) -> Result<RouteStats> {
+    let events = read_events(project, &EventFilter::default())
+        .with_context(|| "read routing events for stats")?;
+    let mut stats = RouteStats::default();
+    let mut latest_tier: BTreeMap<String, String> = BTreeMap::new();
+
+    for event in &events {
+        if event.event_type != EventType::TaskDispatched {
+            continue;
+        }
+        let route = event.data.get("route");
+        let tier = route
+            .and_then(|route| route.get("tier"))
+            .and_then(|tier| tier.as_str())
+            // Older events recorded only the task tier.
+            .or_else(|| event.data.get("tier").and_then(|tier| tier.as_str()))
+            .unwrap_or("unknown");
+        stats.dispatches.add(tier);
+        if let Some(task_id) = &event.task_id {
+            latest_tier.insert(task_id.clone(), tier.to_string());
+        }
+
+        let reason = route
+            .and_then(|route| route.get("reason"))
+            .and_then(|reason| reason.as_str())
+            .unwrap_or("unknown");
+        *stats.reasons.entry(reason.to_string()).or_insert(0) += 1;
+
+        if route
+            .and_then(|route| route.get("escalated"))
+            .and_then(|escalated| escalated.as_bool())
+            .unwrap_or(false)
+        {
+            stats.escalated += 1;
+        }
+    }
+
+    for tier in latest_tier.values() {
+        stats.tasks.add(tier);
+    }
+
+    Ok(stats)
 }
 
 pub(crate) fn plan_for_task(
@@ -226,5 +385,60 @@ review = "frontier"
         assert_eq!(decision.tier, Tier::Frontier);
         assert_eq!(decision.alias, "frontier");
         assert_eq!(decision.reason, loom_core::RouteReason::RoleTier);
+    }
+
+    #[test]
+    fn stats_use_latest_tier_per_task() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project::at(dir.path());
+        fs::create_dir_all(project.loom_dir()).expect("loom dir");
+        for (task_id, tier, reason, escalated) in [
+            ("T-1", "worker", "task_tier", false),
+            ("T-1", "frontier", "escalated", true),
+            ("T-2", "worker", "task_tier", false),
+        ] {
+            let event = loom_core::Event::new("R-1", 1, EventType::TaskDispatched)
+                .task(task_id)
+                .data([(
+                    "route".to_string(),
+                    json!({
+                        "tier": tier,
+                        "reason": reason,
+                        "escalated": escalated,
+                    }),
+                )]);
+            loom_store::append_event(&project, &event).expect("append");
+        }
+
+        let stats = collect_stats(&project).expect("stats");
+        assert_eq!(stats.tasks.total(), 2);
+        assert_eq!(stats.tasks.worker, 1);
+        assert_eq!(stats.tasks.frontier, 1);
+        assert_eq!(stats.tasks.unknown, 0);
+        assert_eq!(stats.tasks.worker_share(), Some(0.5));
+
+        // Retries count as dispatches, not as extra tasks.
+        assert_eq!(stats.dispatches.total(), 3);
+        assert_eq!(stats.dispatches.worker, 2);
+        assert_eq!(stats.dispatches.frontier, 1);
+        assert_eq!(stats.escalated, 1);
+        assert_eq!(stats.reasons.get("task_tier"), Some(&2));
+        assert_eq!(stats.reasons.get("escalated"), Some(&1));
+    }
+
+    #[test]
+    fn stats_fall_back_to_legacy_tier_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project::at(dir.path());
+        fs::create_dir_all(project.loom_dir()).expect("loom dir");
+        let event = loom_core::Event::new("R-1", 1, EventType::TaskDispatched)
+            .task("T-1")
+            .data([("tier".to_string(), json!("frontier"))]);
+        loom_store::append_event(&project, &event).expect("append");
+
+        let stats = collect_stats(&project).expect("stats");
+        assert_eq!(stats.tasks.frontier, 1);
+        assert_eq!(stats.dispatches.frontier, 1);
+        assert_eq!(stats.reasons.get("unknown"), Some(&1));
     }
 }

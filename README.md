@@ -126,7 +126,10 @@ frontier = 1.0
 ```bash
 loom route T-001                 # JSON：tier、模型、原因、fallback、预算、估算
 loom route T-001 --format pretty
+loom route stats                 # 按事件日志统计 worker 占比、升级次数与路由原因
 ```
+
+`route stats` 以每个任务最后一次派发计算 worker 占比；重试计入 `dispatches`，但不重复计任务。这是 M3 退出标准里 “worker ≥50%” 的直接数据来源。
 
 ## 设计入口
 
