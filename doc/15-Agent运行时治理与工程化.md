@@ -867,7 +867,7 @@ timeout_s = 120
 - 允许 `env`，但默认清空 `LOOM_API_KEY` / `OPENAI_API_KEY` 等 secret；
 - 日志写 `.loom/ci/<run_id>/<job>.log`，按 8KB/24KB 预算截断后回给 agent，全文留 artifact。
 
-> 字段形态说明：本节示例用 `[jobs.<id>]` + `cmd`；[16](16-运行时治理落地评估.md) §3.4 建议统一为 `[[jobs]]` + `argv` + `[runner]`，便于目标项目配置容器前缀、避免 `sh -c`。实现前二选一，倾向 16 的写法，不要同时支持两套。
+> 字段形态说明：本节示例是完整设计，用 `[jobs.<id>]` + `cmd`，只用于解释字段语义。[16](16-运行时治理落地评估.md) §7.3 已锁定 v1 实现子集：`[[jobs]]` + `argv` + `[runner]`，字段名为 `fix_argv`/`fix_safe`，不含 `kind`/`env`/`network`，也不含 review/skill job。实现时按 16 §7.3，不要同时支持两套。
 
 全局配置（`.loom/config.toml`）：
 
