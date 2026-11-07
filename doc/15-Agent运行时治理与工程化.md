@@ -15,7 +15,7 @@
 | 反复删除重写 | 重写本身不贵；贵在全文进入历史后每一步重发，且模型用整文件输出代替 patch | 步骤级上下文重编译、patch-first、token 归因、成本感知止损 |
 | 提问即暂停 | 提问被当成失败或交互等待，而不是一次可恢复的返回；真正需要人做的事项又淹没在后续对话里 | `questions.json` + `needs_input` 状态 + 回答/假设协议 + 常驻 attention inbox |
 | skills 泛滥 | skill 是上下文成本与供应链风险，不是“装了就有用” | 仓库画像、离线目录、按需加载、验证后晋升 |
-| 本地 CI 缺位 | 本地 CI 不是验收的附属品；它是 agent 和人都能调用的仓库级检查与提交前闸门 | 技术栈探测、`ci.toml`、`loom ci`、hooks、review/attestation、skills 化检查 |
+| 本地 CI 缺位 | 本地 CI 不是验收的附属品；它是 agent 和人都能调用的仓库级检查与提交前闸门 | 技术栈探测、`.loom.ci.toml`、`loom ci`、hooks、review/attestation、skills 化检查 |
 
 共同主线：**把 agent 的行为变成可观测、可中断、可恢复的结构化产物**；不引入长会话、不依赖交互式等待、不让 LLM 做本可确定性判断的事。
 
@@ -23,7 +23,7 @@
 
 建议实施顺序：
 
-1. **本地 CI 核心**：先让“验证”可信，后面三个方向才有度量基础；先做探测、`ci.toml`、顺序执行与 doctor，不急着上 hooks/attestation。
+1. **本地 CI 核心**：先让“验证”可信，后面三个方向才有度量基础；先做探测、`.loom.ci.toml`、顺序执行与 doctor，不急着上 hooks/attestation。
 2. **question protocol + attention inbox**：当前 `needs_input` 会被 verify 记成 `task.failed`，属于正确性缺陷；同时把“人需要处理的事项”从聊天历史里拿出来，做成常驻可见的 inbox。
 3. **churn 治理**：先做 native 的步骤级上下文重编译 + patch-first + token 归因；拦截写入只是最后一道闸。外部 adapter 只能做粗粒度 watchdog 和选型。
 4. **本地 CI 前移**：pre-commit/pre-push、确定性自动修复、review job、attestation，把能本地解决的检查挡在提交/推送前，减少服务器 CI 的重复劳动。
@@ -711,6 +711,8 @@ score = tag_match * 3
 
 本地 CI **不只是验收 agent 的工作**。它首先是项目自己的仓库级检查面：把格式化、lint、类型检查、单元测试、代码审查、提交信息检查等能在本地完成的动作前移，让 agent 和人都能在 `git commit` / `git push` 之前解决，减少服务器 CI 的重复劳动。
 
+**作用对象**：本节描述的是 Loom 管理的**目标项目**，不是 Loom 自身的源码仓库。`loom ci` 始终在 `--root` 指向的项目根目录运行，配置属于那个项目。Loom 仓库使用同一套机制属于 dogfood；`./scripts/dev.sh`、Rust workspace 只是 Loom 自身的一个 runner 示例，不是产品默认，也不应写进生成器的通用规则。
+
 三个层次要分清：
 
 | 层次 | 负责什么 | 权威性 |
@@ -757,15 +759,15 @@ score = tag_match * 3
 
 - **确定性检查优先**：能用一个命令判断的，不要调用 LLM；
 - **review 先 advisory**：LLM/agent review 默认只给发现，不直接阻断；积累误报率后再考虑升为 gate；
-- **本地证据不是信任边界**：`local_sufficient = true` 的 job 才允许服务器跳过重跑；安全、发布、签名类 job 永远在服务器执行；
+- **本地证据不是信任边界**：v1 不根据本地 attestation 跳过服务器 CI；attestation 只作证据与度量。后续有签名/受信 runner 后，也只对 `local_sufficient = true` 的确定性 job 开放，安全、发布、签名类 job 永远在服务器执行；
 - **不自动提交/推送**：本地 CI 可以修文件和生成报告，但 commit/push 必须由人或显式策略触发。
 
 ### 4.4 初始化设计
 
 `loom init` 增加**探测 + 生成 + 报告**，但遵守“不覆盖用户文件”：
 
-1. 扫描仓库，输出 `stack-profile.json`（与 §3.2 共用）；
-2. 生成 `.loom/ci.toml`（已存在则跳过，`--force` 只覆盖 Loom 生成的文件）；
+1. 扫描仓库，输出 `.loom/stack-profile.json`（与 §3.2 共用；运行时视图，不提交）；
+2. 在目标项目根目录生成 `.loom.ci.toml`（已存在则跳过，`--force` 只覆盖 Loom 生成的文件）。这是**项目策略**，应纳入 git；不要放 `.loom/`——`.loom/` 是运行时状态且被整体忽略，worktree、队友和服务器都看不到。个人覆盖可后置 `.loom/ci.local.toml`（ignored），v1 不做；
 3. 生成 acceptance 模板（写入 `goal.md` 的注释或 `.loom/acceptance.toml`，不直接改 TaskSpec）；
 4. 可选安装 git hooks（`--hooks pre-commit,pre-push`，默认不装）；
 5. 可选生成服务器 CI 的薄封装（`--ci github`，默认不生成）：只做 attestation 校验 + server-only jobs，不复制全部本地命令；
@@ -773,7 +775,9 @@ score = tag_match * 3
 
 `loom init --dry-run` 只打印计划，不写文件。
 
-### 4.5 `ci.toml`
+### 4.5 `.loom.ci.toml`
+
+示例使用 Rust，是因为 Loom 自身也是 Rust；看起来像“本仓库的 CI”，但字段对所有目标项目通用。生成器不能把 `cargo` 或 `./scripts/dev.sh` 写死成默认值。
 
 ```toml
 version = 1
@@ -859,9 +863,11 @@ timeout_s = 120
 - `kind = "command"` 是默认；`review` 调用有界 agent review；`skill` 加载 §3 的已验证 skill；
 - `fix_cmd` 只允许确定性、可逆的修复；必须显式 `safe_fix = true`，执行后展示 diff，不自动提交；
 - `advisory = true` 表示发现只作为建议/attention 事项，不阻断提交；升为 gate 需要评估；
-- `local_sufficient = true` 才允许服务器基于本地 attestation 跳过该 job；默认 false，安全/发布类永远 false；
+- `local_sufficient = true` 只表示该 job 在受信条件下可被服务器参考；**v1 不据此跳过服务器 job**。默认 false，安全/发布类永远 false；后续有签名/受信 runner 才讨论跳过；
 - 允许 `env`，但默认清空 `LOOM_API_KEY` / `OPENAI_API_KEY` 等 secret；
 - 日志写 `.loom/ci/<run_id>/<job>.log`，按 8KB/24KB 预算截断后回给 agent，全文留 artifact。
+
+> 字段形态说明：本节示例用 `[jobs.<id>]` + `cmd`；[16](16-运行时治理落地评估.md) §3.4 建议统一为 `[[jobs]]` + `argv` + `[runner]`，便于目标项目配置容器前缀、避免 `sh -c`。实现前二选一，倾向 16 的写法，不要同时支持两套。
 
 全局配置（`.loom/config.toml`）：
 
@@ -880,7 +886,7 @@ sign = "none"               # none | ed25519
 ```bash
 loom init --dry-run                       # 只看探测结果
 loom ci plan                              # 探测并打印建议的 jobs + 证据 + 推荐 skills
-loom ci plan --write                      # 写 .loom/ci.toml（不覆盖已有）
+loom ci plan --write                      # 写 .loom.ci.toml（不覆盖已有）
 loom ci run --profile pre-commit          # 提交前闸门
 loom ci run --profile pre-push --changed  # 推送前检查（affected-only 后续）
 loom ci run --profile fast --fix          # 只执行 safe_fix job，展示 diff
@@ -910,7 +916,7 @@ loom ci verify-attest <file>              # 校验本地报告/attestation，不
 }
 ```
 
-报告/attestation 至少记录：`tree`、命令 argv、工具版本、开始/结束时间、退出码、日志 hash、`local_sufficient`、是否 `--no-verify` 绕过。签名可选（`sign = "none|ed25519"`），但**未签名不等于可信**。
+报告/attestation 至少记录：`tree`、命令 argv、工具版本、开始/结束时间、退出码、日志 hash、`local_sufficient`、hook 是否实际运行/跳过原因。`--no-verify` 无法被 hook 观测，不记录。签名可选（`sign = "none|ed25519"`），但**未签名不等于可信**。
 
 ### 4.7 git hooks
 
@@ -919,7 +925,7 @@ loom ci verify-attest <file>              # 校验本地报告/attestation，不
 - 已存在非 Loom 管理的 hook：默认拒绝；`--force` 先备份为 `<hook>.bak.<timestamp>`，再安装；
 - pre-commit 默认跑 `pre-commit` profile，目标 ≤ 30 秒；pre-push 默认跑 `pre-push` profile，目标 ≤ 5 分钟；超时/长任务留给服务器；
 - `hooks_fix_safe = true` 时，pre-commit 先对 `safe_fix` job 执行修复并重跑检查；若工作区被改动，hook 退出 `1` 并提示重新 `git add`，**不自动 stage、不自动 commit**；
-- hook 失败即阻断提交/推送；`git commit --no-verify` 仍可用，但写入 `.loom/ci/bypass.jsonl`（hook、tree、时间），并在 `loom ci report` 标记 `unattested`；
+- hook 失败即阻断提交/推送；`git commit --no-verify` 仍可用。**hook 无法观测 `--no-verify`**，所以不承诺记录 bypass；`loom ci report` 只记录 hook 实际运行的结果，服务器以最终检查为准；
 - `loom` 不在 PATH 时，默认 fail-open 并警告（避免破坏新克隆），但记录；可配置 `hooks_fail_open = false`；
 - hook 只调用公开 CLI，不直接 import 内部 crate。
 
@@ -941,8 +947,8 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - **native 提示**：system prompt 明确“finish 前运行 `loom ci run --profile fast`”；失败输出按工具预算截断后回灌；不替代 verify；
 - **baseline 预检**：`[ci] preflight = "fast" | "off"`，默认 `off`；开启后 `loom dispatch` 在派发前跑 fast profile，红了就拒绝并提示“先修 baseline 或加 `--allow-red-baseline`”；
 - **review job**：先跑确定性规则（debug 残留、secret 模式、超大 diff、生成物未更新），再可选调用 agent；发现写成结构化 `findings`，默认进 attention `review`，不直接改代码；
-- **验收模板**：`loom init` 可从 `ci.toml` 生成候选 AC（如 `cargo test --workspace`），由人确认后写入 TaskSpec，而不是自动生效；
-- **服务器消费**：服务器 workflow 调 `loom ci verify-attest`，只跳过 `local_sufficient = true` 的 job；安全/发布/签名、跨平台矩阵、e2e 永远重跑。来自 fork 或不可信机器的 attestation 不作为跳过依据。
+- **验收模板**：`loom init` 可从 `.loom.ci.toml` 生成候选 AC（如 `cargo test --workspace`），由人确认后写入 TaskSpec，而不是自动生效；
+- **服务器消费**：v1 只把 `loom ci verify-attest` 当证据/度量，不根据本地 attestation 跳过服务器 job；安全/发布/签名、跨平台矩阵、e2e 永远重跑。后续有签名或受信 runner 后，才考虑对 `local_sufficient = true` 的确定性 job 开放跳过。
 
 ### 4.9 与 skills 的衔接
 
@@ -959,9 +965,9 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 硬约束：
 
 - skill **不能**关闭/降低已有 job 的 `local_sufficient` 或 `advisory`；
-- skill **不能**声明未在 `ci.toml` 中出现的任意 shell 命令；需要命令就走 `kind = "command"` 并接受同样的超时/权限/静态检查；
+- skill **不能**声明未在 `.loom.ci.toml` 中出现的任意 shell 命令；需要命令就走 `kind = "command"` 并接受同样的超时/权限/静态检查；
 - skill **不能**修改 TaskSpec/AC/预算；
-- 无网络、无 shell 是默认；需要时在 `ci.toml` 显式声明，不由 skill 自行决定；
+- 无网络、无 shell 是默认；需要时在 `.loom.ci.toml` 显式声明，不由 skill 自行决定；
 - 安装/升级 skill 要更新 lock；CI 运行不使用浮动分支。
 
 ### 4.10 技术栈探测
@@ -989,7 +995,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - 本地报告可能包含代码片段和日志：按 artifact 管理，写前做 secret 模式检查/截断；
 - git hooks 显式安装、可卸载、可备份；不改全局 git 配置；
 - attestation 只是“某个环境跑过这些命令”的证据，不是安全边界；不可信来源不享受跳过；
-- 不完全替换现有 CI：只补本地入口与服务器跳过协议，GitHub Actions 等仍可独立存在。
+- 不完全替换现有 CI：v1 只补本地入口与证据，不做服务器跳过；GitHub Actions 等仍独立存在。
 
 ### 4.12 观测
 
@@ -997,9 +1003,9 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 - 本地各 profile 的运行次数、通过率、P50/P95 墙钟；
 - `safe_fix` 触发次数、agent 修复后重跑次数、首过率；
-- `--no-verify` 绕过的次数与对应 tree；
+- hook 实际运行/失败/跳过次数（`--no-verify` 无法观测，不统计）；
 - review findings 数量、采纳/拒绝/误报率；
-- 服务器 CI 被跳过的 job 与节省的分钟数（按 attestation 统计）；
+- 本地拦截的失败与预计节省的服务器重跑时间（v1 只做估算；启用服务器跳过后再统计真实节省）；
 - CI 失败产生的 attention 事项与处理时延。
 
 目标函数是**减少服务器 CI 的重复工作并缩短反馈回路**，不是单纯把本地命令跑得更多。
@@ -1008,7 +1014,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 | 部分 | 可行性 | 说明 |
 |---|---|---|
-| 探测 + 生成 ci.toml | **高** | 规则明确，`--dry-run` 可先验证 |
+| 探测 + 生成 `.loom.ci.toml` | **高** | 规则明确，`--dry-run` 可先验证 |
 | 顺序执行 + 日志预算 | **高** | 复用现有工具输出协议 |
 | pre-commit/pre-push hooks | **高** | 纯 shell/CLI 包装；注意备份与 fail-open |
 | safe fix + diff 展示 | **高** | 只限确定性命令；不自动提交 |
@@ -1018,19 +1024,19 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 | baseline 预检 | **中** | 老仓库红基线常见，默认应关闭 |
 | 环境一致性 | **中** | 容器/版本漂移；v1 只检测不修复 |
 | monorepo / 多栈 | **中** | 等 M5 工作区设计；v1 按根目录单栈 |
-| 服务器按 attestation 跳过 | **中** | 仅 `local_sufficient`；不可信来源不跳过 |
+| 服务器按 attestation 跳过 | **低（v1 不做）** | 本地文件可伪造；需签名/受信 runner，后置 |
 | 嵌套容器 | **低** | 当前 dev 已用 podman/docker，嵌套复杂；后置 |
 
-结论：**先做探测 + `ci.toml` + 顺序 `loom ci run` + doctor；再做 hooks、safe fix、report/attestation；review/skill job 先 advisory。并行、缓存、容器化、affected-only 后置。**
+结论：**先做探测 + `.loom.ci.toml` + 顺序 `loom ci run` + doctor；再做 hooks、safe fix、report/attestation；review/skill job 先 advisory。并行、缓存、容器化、affected-only 后置。**
 
 ### 4.14 验收（未来实现时）
 
-- [ ] `loom init` 在本仓库识别 Rust workspace，生成 `ci.toml`，且不覆盖已有文件。
+- [ ] `loom init` 在目标项目（例如临时 Rust/Node/Python 仓库；Loom 自身 dogfood 单独验证）识别技术栈，生成 `.loom.ci.toml`，且不覆盖已有文件。
 - [ ] `loom ci run --profile pre-commit` 在格式错误时失败，`--fix` 只修 `safe_fix` job 并展示 diff。
 - [ ] `hooks_fix_safe = true` 时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
-- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；`--no-verify` 被记录。
+- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。
 - [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败。
-- [ ] 服务器 workflow 只跳过 `local_sufficient = true` 的 job；安全/发布/矩阵不被跳过。
+- [ ] v1 不使用本地 attestation 跳过服务器 job；后续有签名/受信 runner 后，才只跳过 `local_sufficient = true` 的确定性 job，安全/发布/矩阵永远不跳过。
 - [ ] review job 有 token/时间上限，默认 advisory，findings 结构化；无网络。
 - [ ] `kind = "skill"` 只能加载 lock 内、通过静态检查的 skill，不能关闭 gate。
 - [ ] CI 失败开 attention `review`/`operation` 事项；同 tree 成功后自动 resolve。
@@ -1048,7 +1054,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 | attention | `.loom/inbox.json`（只读视图） | `attention.opened`、`attention.updated`、`attention.resolved`、`attention.expired` | `[attention]` | `loom inbox [--line/--check]`、`loom inbox ack/defer/resolve` |
 | questions | `outbox/questions.json`、`answers.json`、`assumptions.jsonl` | `task.needs_input`、`task.answered` | `[questions]` | `loom answer` |
 | skills | `stack-profile.json`、`skills.catalog.json`、`skills.lock` | 无（skill 加载不是任务状态） | `[skills]` | `loom skill scan/recommend/add/show/verify/stats` |
-| CI | `.loom/ci.toml`、`.loom/ci/<run>/{report,attestation}.json`、`bypass.jsonl` | `attention.*`（失败/待复核时） | `[ci]` | `loom ci plan/run/doctor/install-hooks/report/verify-attest/stats` |
+| CI | `.loom.ci.toml`（tracked）、`.loom/ci/<run>/{report,attestation}.json`（runtime） | `attention.*`（失败/待复核时） | `[ci]` | `loom ci plan/run/doctor/install-hooks/report/verify-attest/stats` |
 
 共同约束：
 
@@ -1057,7 +1063,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - **固定角落不污染机器输出**：footer 只写 stderr 且仅 TTY；`--json` 的 stdout 保持纯 JSON；非 TTY/CI 默认关闭。
 - **不改变退出码语义**：`0` 成功、`2` 需要人工/阻塞、`3` 预算/超时、`4` adapter 失败；`churn_guard` / `needs_input` 都是 `2`，用事件 `data.code` 区分。
 - **上下文硬预算不变**：churn 摘要、问题、skill 正文都受 8KB/24KB/128KB 与 Context Compiler 约束；attention 默认不进模型上下文。
-- **本地 CI 不是信任边界**：只有 `local_sufficient` 的 job 可被服务器跳过；安全/发布/签名永远在服务器执行。
+- **本地 CI 不是信任边界**：v1 不用本地 attestation 跳过服务器 job；后续有签名/受信 runner 后，才讨论对 `local_sufficient` 的确定性 job 跳过；安全/发布/签名永远在服务器执行。
 - **不依赖真实模型即可测试**：attention/questions/CI 核心、churn 的投影都能用 mock/native 脚本化 provider 覆盖；review job 的模型部分单独标 advisory。
 - **churn 的 KPI 是 `wasted_tokens_est` / `wasted_cost_usd_est`，不是写入次数**：`write_passes` / `churn_ratio` 只用于解释原因；L2 拦截不是主要节省手段。
 - **churn 优化的是 `messages` 投影与工具形态**（patch/edit），不改变 provider 的 wire 协议。
@@ -1068,12 +1074,12 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 | 顺序 | 方向 | 为什么先做 | 依赖 | 粗略工作量 |
 |---|---|---|---|---|
-| P0 | CI 核心：init 探测 + `ci.toml` + 顺序 `loom ci run` + doctor | 让“本地检查”先有统一入口；后续度量与 hooks 都靠它 | 无 | 3–4 人日 |
+| P0 | CI 核心：init 探测 + `.loom.ci.toml` + 顺序 `loom ci run` + doctor | 让“本地检查”先有统一入口；后续度量与 hooks 都靠它 | 无 | 5–7 人日 |
 | P0 | question protocol + attention inbox | 修 `needs_input → task.failed` 的正确性缺陷；同时解决人工事项被历史淹没 | 无 | 4–5 人日 |
 | P1 | CI 前移：pre-commit/pre-push hooks + safe fix + report | 把格式/lint/提交信息挡在提交前，直接减少服务器重复工作 | CI 核心 | 3–4 人日 |
 | P1 | churn：native 步骤级上下文重编译 + patch-first + token 归因 | 先切断旧全文的输入复利，再谈拦截；指标必须先于策略 | 无 | 4–6 人日 |
 | P1 | churn watchdog（外部 adapter） | 只做 gross loop 止损与选型依据 | 容器内需有 adapter 二进制 | 2–3 人日 |
-| P2 | CI review/skill job + attestation/服务器跳过 | 把 review 与可复用检查模板纳入；先 advisory | CI 前移 + skills | 3–5 人日 |
+| P2 | CI review/skill job + attestation 证据 | 把 review 与可复用检查模板纳入；先 advisory；服务器跳过后置 | CI 前移 + skills | 3–5 人日 |
 | P2 | skills：scan + 本地 catalog + lock + 按需加载 | 结构先立起来，避免全局安装；CI 是首个使用场景 | CI/任务集 | 5–8 人日 |
 | P2 | skills：L2 评估与晋升 | 证明 skill 真的有用；review advisory→gate 也靠它 | 真实模型 + 固定任务集 + 账单 | 后置 |
 | P3 | embedding/联网目录 | 收益未证明 | — | 不做 |
@@ -1097,9 +1103,9 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - 不为每个问题调用一次 LLM 分类；先走确定性策略。
 - 不把 attention inbox 做成聊天/工单系统，也不做常驻 daemon；v1 只做事件 + 视图 + 只读轮询。
 - 不自动执行 inbox 里的 `actions[].cmd`；不自动关闭 `blocking` 事项，不用 `acked` 冒充 `resolved`。
-- 不静默安装 git hooks，不修改全局 git 配置；`--no-verify` 必须留痕。
+- 不静默安装 git hooks，不修改全局 git 配置；不承诺记录 `--no-verify`，服务器最终门禁兜底。
 - 不用本地 CI 替代服务器安全/发布/签名门禁；不信任未签名或来源不明的 attestation。
-- 不让 skill 直接定义任意 CI shell 命令或关闭已有 gate；命令必须出现在 `ci.toml` 并接受同样的检查。
+- 不让 skill 直接定义任意 CI shell 命令或关闭已有 gate；命令必须出现在 `.loom.ci.toml` 并接受同样的检查。
 - 不做嵌套容器 CI（v1）。
 - 不把 churn 直接归因于某个模型；先积累按模型的度量。
 - 不自动修改 AC/目标来“让任务通过”；AC 变更必须走 judgment/人工。
@@ -1116,8 +1122,8 @@ loom verify（TaskSpec acceptance，仍是任务权威）
    - 倾向不递增；新 run + `question_round`，避免“提问=重试”的语义。
 4. skills 的 catalog 信任源与许可证策略由谁维护？
    - 需要团队策展；v1 只支持本地目录与手工导入。
-5. `ci.toml` 与现有 `Makefile`/CI 的优先级？
-   - 倾向“采纳已有命令”，`ci.toml` 只做聚合与超时/日志包装。
+5. `.loom.ci.toml` 与现有 `Makefile`/CI 的优先级？
+   - 倾向“采纳已有命令”，`.loom.ci.toml` 只做聚合与超时/日志包装。
 6. baseline 预检默认开还是关？
    - 倾向默认关，项目稳定后再开，避免接入摩擦。
 7. 父子 agent 的问题上浮是否需要独立“问题预算”？
@@ -1139,13 +1145,13 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 ## 9. 最小验收清单（未来实现时）
 
-- [ ] `loom ci plan` 能在本仓库识别 Rust workspace，并给出 fmt/clippy/test/build 与证据。
-- [ ] `loom init` 不覆盖已有 `ci.toml` / workflow / hook；`--dry-run` 无写操作。
+- [ ] `loom ci plan` 能在目标项目识别技术栈（Loom 自身 dogfood 时是 Rust workspace），并给出 jobs 与证据。
+- [ ] `loom init` 不覆盖已有 `.loom.ci.toml` / workflow / hook；`--dry-run` 无写操作。
 - [ ] 缺 `cargo`/`pnpm` 时 `loom ci doctor` 给出可行动报错，而不是静默跳过。
 - [ ] `loom ci run --profile pre-commit` 在格式错误时失败；`--fix` 只修 `safe_fix` job 并展示 diff，不自动提交。
 - [ ] `hooks_fix_safe` 生效时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
-- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；`--no-verify` 写入 `bypass.jsonl`。
-- [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；服务器只跳过 `local_sufficient` job。
+- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。
+- [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；v1 不据此跳过服务器 job。
 - [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。
 - [ ] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。
@@ -1162,3 +1168,9 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [ ] `loom skill add` 只写项目级目录与 `skills.lock`；未通过静态检查的 skill 拒绝安装。
 - [ ] 加载 skill 时只注入索引行；正文经 `loom skill show` 按需读取，受 4KB/8KB 预算。
 - [ ] 所有新增事件同步了 `loom-core` 类型、`schemas/event.v1.json`、`doc/03` §11.2 与至少一个测试。
+
+---
+
+## 10. 落地评估
+
+基于当前代码的接入点、契约变更、分期人日与风险，以及三处需要先修正的设计（`.loom.ci.toml` 位置与归属、attestation 授权、`verify` 的 claim/`needs_input` 语义），见 [16-运行时治理落地评估.md](16-运行时治理落地评估.md)。
