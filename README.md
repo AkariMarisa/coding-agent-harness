@@ -14,7 +14,7 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
 | 已实现 | `loom init/doctor/status`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom resume` |
 | 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、锁与合并队列、并行调度。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
-| 已设计未实现 | 写入抖动（churn）治理、提问/回答协议、skills 治理、初始化本地 CI bootstrap，见 [doc/15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md) |
+| 已设计未实现 | 写入抖动（churn）治理、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md) |
 
 ## 快速开始
 

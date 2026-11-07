@@ -1,7 +1,7 @@
 # 15 Agent 运行时治理与工程化
 
 > 状态：**设计稿，未实现**（2026-11-07）。
-> 范围：四个已观察问题——写入抖动、提问阻塞、skills 治理、初始化时本地 CI bootstrap。
+> 范围：四个已观察问题——写入抖动、提问阻塞与人工事项可见性、skills 治理、agent/harness 驱动的本地 CI。
 > 前置阅读：[08-设计路线-v0.2.md](08-设计路线-v0.2.md)（状态所有权 / adapter 契约）、[03-核心协议.md](03-核心协议.md)（TaskSpec / 回执 / 事件）、[10-工具输出协议-v0.1.md](10-工具输出协议-v0.1.md)（工具与 telemetry）、[14-当前问题与卡点.md](14-当前问题与卡点.md)（当前环境限制）。
 
 ---
@@ -13,18 +13,21 @@
 | 问题 | 本质 | 控制面要补的东西 |
 |---|---|---|
 | 反复删除重写 | 重写本身不贵；贵在全文进入历史后每一步重发，且模型用整文件输出代替 patch | 步骤级上下文重编译、patch-first、token 归因、成本感知止损 |
-| 提问即暂停 | 提问被当成失败或交互等待，而不是一次可恢复的返回 | `questions.json` + `needs_input` 状态 + 回答/假设协议 |
+| 提问即暂停 | 提问被当成失败或交互等待，而不是一次可恢复的返回；真正需要人做的事项又淹没在后续对话里 | `questions.json` + `needs_input` 状态 + 回答/假设协议 + 常驻 attention inbox |
 | skills 泛滥 | skill 是上下文成本与供应链风险，不是“装了就有用” | 仓库画像、离线目录、按需加载、验证后晋升 |
-| 初始化缺 CI | agent 没有可信的本地反馈回路，验收靠人手写 | 技术栈探测、`ci.toml`、`loom ci`、baseline 预检 |
+| 本地 CI 缺位 | 本地 CI 不是验收的附属品；它是 agent 和人都能调用的仓库级检查与提交前闸门 | 技术栈探测、`ci.toml`、`loom ci`、hooks、review/attestation、skills 化检查 |
 
 共同主线：**把 agent 的行为变成可观测、可中断、可恢复的结构化产物**；不引入长会话、不依赖交互式等待、不让 LLM 做本可确定性判断的事。
 
+另一条主线：**需要人处理的事项必须有独立于聊天历史的常驻出口**——既包括提问，也包括审批、操作、复核和提醒；不能只靠“往上翻消息”。
+
 建议实施顺序：
 
-1. **本地 CI bootstrap**：先让“验证”可信，后面三个方向才有度量基础。
-2. **question protocol**：当前 `needs_input` 会被 verify 记成 `task.failed`，属于正确性缺陷，应优先修。
+1. **本地 CI 核心**：先让“验证”可信，后面三个方向才有度量基础；先做探测、`ci.toml`、顺序执行与 doctor，不急着上 hooks/attestation。
+2. **question protocol + attention inbox**：当前 `needs_input` 会被 verify 记成 `task.failed`，属于正确性缺陷；同时把“人需要处理的事项”从聊天历史里拿出来，做成常驻可见的 inbox。
 3. **churn 治理**：先做 native 的步骤级上下文重编译 + patch-first + token 归因；拦截写入只是最后一道闸。外部 adapter 只能做粗粒度 watchdog 和选型。
-4. **skills 治理**：扫描/加载/静态检查可以先做；**晋升评估依赖真实模型与固定任务集**，当前仍受 [14](14-当前问题与卡点.md) 的环境卡点限制。
+4. **本地 CI 前移**：pre-commit/pre-push、确定性自动修复、review job、attestation，把能本地解决的检查挡在提交/推送前，减少服务器 CI 的重复劳动。
+5. **skills 治理**：扫描/加载/静态检查可以先做；CI job 模板与 review 规则可以作为 skill 的早期落点；**晋升评估依赖真实模型与固定任务集**，当前仍受 [14](14-当前问题与卡点.md) 的环境卡点限制。
 
 明确不做：全局安装 skill、联网自动装 skill、embedding/向量检索、交互式等待、为每个问题调用一次 LLM、v1 嵌套容器。
 
@@ -175,9 +178,9 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 ---
 
-## 2. 问题二：提问导致会话暂停
+## 2. 问题二：提问导致会话暂停，人工事项又被历史淹没
 
-### 2.1 现状（这是一个正确性缺陷）
+### 2.1 现状（这是一个正确性缺陷 + 一个可见性缺陷）
 
 当前链路：
 
@@ -188,9 +191,168 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 5. `dispatch` 只接受 `pending/ready/failed/escalated`，没有“已回答、继续”的状态；
 6. 外部 agent 若真在等 stdin，会挂到超时，烧墙钟。
 
-相关实现：`src/crates/loom-cli/src/verify_cmd.rs`（`claim_done` / `TaskFailed`）、`src/crates/loom-adapter/src/mock.rs`（`NeedsInput`）、`src/crates/loom-core/src/task.rs`（没有 `NeedsInput` 状态）。
+第二个问题是**可见性**：即使提问被正确记成 `needs_input`，它仍然只是一条事件或一份 `questions.json`；用户离开当前会话、或者继续问别的问题后，提醒就沉到历史里了。而且真正需要人介入的并不只有“问题”：
 
-### 2.2 原则
+| 需要人做的事项 | 例子 | 当前问题 |
+|---|---|---|
+| 回答 | “迁移是否兼容旧 schema？” | `questions.json` 只覆盖 agent 主动提问，且没有常驻入口 |
+| 审批 | 改 AC、跨 tier 升级、提高预算、不可逆迁移、合并/推送 | 散落在失败包、回执、日志里，没有统一待办 |
+| 操作 | 安装 `goose`、提供 API key、启动服务、跑一次迁移 | `doctor` 只在被调用时输出，用户不看就不知道 |
+| 复核 | 高风险 diff、红基线、skill 晋升、review 发现 | 没有“待我确认”的队列 |
+| 提醒 | 任务等待回答超时、预算接近上限、锁即将过期 | 只能靠轮询或记忆 |
+
+所以问题不只是“提问即暂停”，而是**控制面缺少一个独立于聊天历史的人工事项出口**。这个出口必须同时承载问题、审批、操作、复核和提醒，并且在工作区的某个固定位置一直可见。
+
+相关实现：`src/crates/loom-cli/src/verify_cmd.rs`（`claim_done` / `TaskFailed`）、`src/crates/loom-adapter/src/mock.rs`（`NeedsInput`）、`src/crates/loom-core/src/task.rs`（没有 `NeedsInput` 状态）、`src/crates/loom-cli/src/doctor_cmd.rs`（只在显式调用时输出）。
+
+### 2.2 人工事项收件箱（attention inbox）
+
+目标：任何时候都能用一条命令回答“现在有什么需要我处理”，并且在 harness 的一个固定角落持续显示，而不是靠用户回翻对话。事项**不只包括问题**，还包括审批、操作、复核和提醒。
+
+它不是聊天工具，也不是工单系统：一个事项是“结构化待办 + 证据引用 + 可执行动作”，没有消息线程，不承担讨论。
+
+#### 事项类型
+
+| `kind` | 含义 | 典型来源 | 关闭条件 |
+|---|---|---|---|
+| `question` | agent 明确提问，等人或上游回答 | `questions.json` | `task.answered` 或显式回答 |
+| `approval` | 需要明确批准/拒绝 | 改 AC、跨 tier 升级、提高预算、不可逆迁移、合并/推送 | 显式批准/拒绝 |
+| `operation` | 人必须执行一个动作 | 缺工具、缺 API key、服务未启动、需要跑迁移 | 探测器通过或显式完成 |
+| `review` | 需要人的判断 | 高风险 diff、红基线、skill 晋升、review 发现 | 显式复核结论 |
+| `reminder` | 时间/阈值提醒 | 回答超时、预算接近上限、锁即将过期 | 条件解除或时间过去 |
+
+`severity` 只有三档：
+
+- `blocking`：相关工作已经停住，不处理就无法继续（例如 `needs_input`、缺关键工具）；
+- `soon`：还能继续，但应在下一次提交/派发前处理（例如非阻塞问题、红基线、review 建议）；
+- `info`：只进完整列表，不进固定角落，不计数为待办。
+
+#### 数据模型
+
+`.loom/inbox.json` 是**视图**，由事件重放生成；事实源仍是 `events.jsonl`。不要手改。
+
+```json
+{
+  "v": 1,
+  "generated_at": "2026-11-07T12:00:00Z",
+  "counts": {"blocking": 1, "soon": 2, "info": 3},
+  "items": [
+    {
+      "id": "ATT-20261107-003",
+      "kind": "operation",
+      "source": "env",
+      "severity": "blocking",
+      "status": "open",
+      "title": "容器内缺少 goose，无法跑 adapter canary",
+      "detail": "PATH 中未找到 goose；先补镜像或挂载二进制",
+      "refs": ["doc/14-当前问题与卡点.md#2", "artifact:adapter-canary-3"],
+      "task_id": null,
+      "run_id": null,
+      "dedupe_key": "env:missing-tool:goose",
+      "occurrences": 2,
+      "created_at": "2026-11-07T09:00:00Z",
+      "last_seen_at": "2026-11-07T12:00:00Z",
+      "defer_until": null,
+      "expires_at": null,
+      "actions": [
+        {"id": "show", "label": "查看安装方式", "cmd": "loom doctor --explain goose"},
+        {"id": "ack", "label": "我看到了", "cmd": "loom inbox ack ATT-20261107-003"}
+      ]
+    }
+  ]
+}
+```
+
+约束：
+
+- `title` ≤ 120 字符，`detail` ≤ 2KB；`refs` 只放路径/事件/artifact 引用，不放全文、不放日志；
+- `source`：`task | ci | skills | env | git | human`；
+- `dedupe_key` 在未关闭事项中唯一；同一问题重复出现只增加 `occurrences` 和 `last_seen_at`，不刷屏；
+- `actions[].cmd` 是**建议命令**，只作为文本展示，永不自动执行，也不做 shell 求值；
+- 事项里禁止出现 secret、token、完整 provider 响应；
+- 已解决事项在视图中保留 7 天便于回看，事件永久保留。
+
+#### 生命周期与事件
+
+| 事件 | `data` | 效果 |
+|---|---|---|
+| `attention.opened` | `item_id`, `kind`, `source`, `severity`, `dedupe_key`, `title`, `refs`, `task_id?`, `run_id?` | 新建事项；同 `dedupe_key` 未关闭时只累加 `occurrences` |
+| `attention.updated` | `item_id`, `changes`（`severity` / `detail` / `defer_until` / `occurrences`） | 更新事项，不改变身份 |
+| `attention.resolved` | `item_id`, `by`, `reason`, `assumption_id?` | 关闭事项 |
+| `attention.expired` | `item_id`, `policy` | 过期关闭；只允许可逆/提醒类，不可逆的 `blocking` 不允许静默过期 |
+
+状态：`open → acked → resolved`，旁路 `deferred` / `expired`。`acked` 只表示“已看到”，**不关闭事项、不降低 `blocking` 计数**；`defer` 只允许 `soon`/`info`，避免阻塞事项被“稍后处理”弄丢。
+
+任务事件与事项的联动：
+
+| 触发 | 事项 |
+|---|---|
+| `task.needs_input` | 每个 blocking 问题开一个 `question`；非阻塞问题开 `soon` |
+| `task.answered` | 自动 resolve 对应 `question` |
+| `task.blocked` | 开 `operation` 或 `approval`，带 `reason` |
+| `verify` 发现红基线 / CI 失败 | 开 `review`（是否接受基线/如何修），附日志 artifact |
+| `loom doctor` 缺工具/缺 key | 开 `operation` |
+| 路由成本护栏拒绝派发 | 开 `approval`（提高预算、换 tier、缩范围） |
+| skill 达到晋升条件 | 开 `review` |
+| 同一任务连续 `task.failed` | 开 `review`（升级、改 AC、拆任务） |
+
+控制面在写任务事件时同步写 `attention.*`。两者不是重复状态：任务事件决定任务状态，`attention.*` 决定“人需要看到什么”。
+
+#### 固定角落在哪里
+
+`.loom/inbox.json` 是给所有前端（CLI、TUI、桌面端、编辑器插件）读的稳定视图；“角落”不绑定某个 UI。v1 先把 CLI footer 与 statusline 做出来，后续界面复用同一视图，不另建状态。
+
+| 出口 | 内容 | 约束 |
+|---|---|---|
+| 每条人类命令的 footer | `[loom] 1 阻塞 · 2 待办 → loom inbox` | 写 **stderr**；仅 TTY；不污染 `--json` 的 stdout；非 TTY/CI 自动关闭 |
+| `loom status` | 计数 + 前 3 条标题 | 与 footer 共用同一视图 |
+| `loom inbox` | 完整列表，按 `blocking → soon → info`、再按时间排序 | 支持 `--json`、`--kind`、`--task`、`--all` |
+| `loom inbox --line` | 单行，供 shell prompt / tmux / starship / statusline 轮询 | 只读、无副作用、开销固定；`[!] 1 blocking · 2 pending` |
+| `loom inbox --check` | 有 `blocking` 时退出码 `2` | 给脚本/钩子用；不打印大段内容 |
+| TUI / 桌面端（后续） | 同一视图的可点击列表 | 不另建状态 |
+
+补充规则：
+
+- `--no-inbox` 或 `LOOM_NO_INBOX=1` 关闭 footer；`loom inbox` 自己不再打印 footer；
+- footer 只显示一行，取最高优先级事项的标题并截断，禁止 ANSI 注入；
+- **默认不把 inbox 注入模型上下文**：这是给人看的通道。若确需让 agent 知道“有人在等你”，只注入计数（`[attention] include_in_packet = "counts"`），并受上下文预算约束；
+- 固定角落不是模态弹窗，不阻塞命令执行；`blocking` 只影响 `--check` 和任务派发策略，不强制打断用户；
+- 优先级：`blocking` > `soon` > 最近更新；同一任务的事项聚合展示，但保留独立 `id`。
+
+配置示例：
+
+```toml
+[attention]
+footer = "tty"              # tty | always | off
+include_in_packet = "off"   # off | counts
+dedupe_cooldown_s = 600
+retain_resolved_days = 7
+```
+
+#### 降噪
+
+- 去重：`dedupe_key`（如 `task:T-...:question:Q1`、`env:missing-tool:goose`、`ci:clippy:<tree>`）；
+- 聚合：同一任务的多个 `soon` 事项在 footer 只算一条，在完整列表中展开；
+- 冷却：同一 `dedupe_key` 的重复提醒默认 10 分钟内不重复计数；
+- 过期：带默认值的可逆问题可过期并采用默认值（写 assumption）；不可逆/安全/预算问题不自动过期；
+- 关闭：条件解除时自动 resolve；无法自动判断时必须显式 `loom inbox resolve <id> --reason ...`；
+- 不做“已读即消失”：`acked` 仍保留在列表中，避免用户点一下就忘。
+
+#### 父子 agent 与多任务
+
+- 子 agent 的问题仍以 `questions.json` + exit 2 返回；控制面按 `task_id` 开事项；
+- 父 agent 能代答就代答并 resolve；不能代答就上浮，用户只看到一个 inbox，不需要逐个会话查看；
+- 同一规范化问题在多个子任务出现时合并为一个事项，`refs` 列出所有 `task_id`；
+- 父 agent 不等待、不 sleep；子任务保持 `needs_input`，父 agent 继续处理其他任务。
+
+#### 安全
+
+- 事项文本来自 agent/仓库，视为**不可信输入**：转义控制字符、限制长度、`refs` 不跟随 symlink 到仓库外；
+- `actions[].cmd` 只展示，不自动执行；用户显式运行后才生效；
+- 不把事项正文拼进 shell；`loom inbox resolve --note` 只写文件；
+- 未来若做 TUI/桌面端，动作按钮也必须走同一命令层，不允许直接调用内部函数绕过校验。
+
+### 2.3 原则
 
 1. **提问是返回值，不是暂停。** 进程退出，状态落盘；回答后开新 run 继续，不保留会话。
 2. **提问必须结构化。** 不接受“最后一段自然语言里有个问号”作为协议。
@@ -198,8 +360,10 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 4. **不把提问计入失败。** `needs_input` 是正常状态，不是 `failed`。
 5. **批处理、去重、TTL。** 一次回答尽量覆盖多个问题；过期用默认值或明确阻塞。
 6. **父子 agent 不互相等待。** 子 agent 把问题作为返回值交给父级；父级能答就答，不能答就上浮，同时继续独立任务。
+7. **人工事项统一出口。** 问题、审批、操作、复核、提醒都进 attention inbox；不能只发一条聊天消息或只写一份日志。
+8. **常驻可见但低噪。** footer/statusline 一直可见；去重、聚合、`ack`/`defer` 控制噪声；但 `blocking` 不因“已读”而消失，也不默认注入模型上下文。
 
-### 2.3 契约
+### 2.4 契约
 
 adapter 需要输入时：
 
@@ -243,7 +407,7 @@ adapter 需要输入时：
 - `evidence` 只放路径/artifact 引用，不放全文；
 - 单任务最多 3 个 blocking 问题；超过则合并或拆任务。
 
-### 2.4 状态与事件
+### 2.5 状态与事件
 
 建议新增：
 
@@ -253,6 +417,8 @@ adapter 需要输入时：
 | `task.answered` | `question_ids`, `by`, `source`, `assumption_ids` | `needs_input → ready` |
 
 新增 `TaskStatus::NeedsInput`。不要复用 `blocked`：`blocked` 表示依赖/锁/环境阻塞，`needs_input` 表示等人或等上游回答；两者混在一起会让统计和升级都失真。
+
+写 `task.needs_input` / `task.answered` 时，控制面同步写 `attention.opened` / `attention.resolved`（§2.2），保证问题不仅改变任务状态，还进入常驻 inbox。
 
 `verify` 的结果矩阵要一起改：
 
@@ -267,7 +433,7 @@ adapter 需要输入时：
 
 这是本次设计里**最应该先修的现有行为**：提问/阻塞不能污染升级计数。
 
-### 2.5 回答协议
+### 2.6 回答协议
 
 ```text
 子 agent / worker 提问
@@ -316,7 +482,9 @@ adapter 需要输入时：
 - `attempt` 不变（提问不是失败），另记 `question_round`；
 - 失败包只带未回答问题，不带已答问题。
 
-### 2.6 假设账本
+`loom answer` 写 `answers.json` 的同时写 `task.answered` 与 `attention.resolved`，所以回答后对应 inbox 事项立即消失；`--choice` 也允许直接按 `recommended`/`default` 批量回答非阻塞问题。
+
+### 2.7 假设账本
 
 对“可逆 + 默认值继续”的问题，写 `.loom/assumptions.jsonl`：
 
@@ -326,7 +494,7 @@ adapter 需要输入时：
 
 review / verify 可以检查假设是否被后续证据推翻。这样“先继续”不会变成“悄悄猜”。
 
-### 2.7 父子 agent
+### 2.8 父子 agent
 
 - 子 agent 没有“提问通道”，只有返回值：`questions.json` + exit 2。
 - 父 agent 的 `[questions]` 策略决定它能否代答：`allowed_scopes`、`max_auto_answers`、`max_question_tokens`。
@@ -334,24 +502,28 @@ review / verify 可以检查假设是否被后续证据推翻。这样“先继�
 - 去重：按 `task_id + normalized_question` 哈希；同一问题在多个子任务出现时合并为一个 inbox 条目。
 - 预算：回答问题的 judgment 调用单独记账，设 `max_cost_usd`，不允许用回答把任务预算吃穿。
 
-### 2.8 外部 adapter 兜底
+### 2.9 外部 adapter 兜底
 
 - 在 adapter prompt 里明确：“不要交互式提问；写 `outbox/questions.json` 并退出 2。”
 - 启动参数统一 `stdin = null`。
-- 若进程仍挂起：watchdog 在“无 token、无文件变化、无日志增长”持续 N 秒后终止，读取最后的 agent 消息，合成一个 `Q?`（`confidence=low`），标记 `needs_input`，而不是 `failed`。
+- 若进程仍挂起：watchdog 在“无 token、无文件变化、无日志增长”持续 N 秒后终止，读取最后的 agent 消息，合成一个 `Q?`（`confidence=low`），标记 `needs_input`，同时开一个 `blocking` 的 attention 事项，而不是 `failed`。
 - 若 adapter 退出 0 但内容明显是提问且没有 diff：不要自动判成 `needs_input`（容易误判）；让 verify 失败，并在 `next_hint` 里提示“若需要输入，请用 questions.json + exit 2”。只有 adapter 明确声明 `supports_questions` 时才启用启发式。
 
-### 2.9 可行性
+### 2.10 可行性
 
 | 部分 | 可行性 | 说明 |
 |---|---|---|
 | 控制面状态/事件/回答 | **高** | 纯文件与事件，可先于真实模型完成 |
+| attention inbox 视图 + footer/`--line` | **高** | 事件重放 + 只读视图；无模型、无网络依赖 |
 | native `ask` 工具 | **高** | 写 questions.json + 返回 exit 2；脚本化 provider 可测 |
 | 外部 adapter 遵守协议 | **中** | 取决于 agent 是否听话；需要 canary 与兜底 |
 | 自动回答质量 | **中** | 需要明确授权边界；宁可上浮，不要乱答 |
 | 父子多 agent | **中** | 当前无并发；顺序执行也能先定义协议，M4 再并行 |
+| 把“操作/审批”自动闭环 | **低–中** | 探测型（缺工具）可自动关闭；需要判断的仍要人 |
 
-结论：**先修 verify 的 `needs_input` 误判，再做 questions.json 与 `loom inbox/answer`；外部 adapter 的合规性等二进制到位后加 canary。**
+结论：**先修 verify 的 `needs_input` 误判，同时做 `attention.*` + `loom inbox`，再做 `questions.json` 与 `loom answer`；外部 adapter 的合规性等二进制到位后加 canary。**
+
+可见性可以独立于真实模型先做完：即使没有 agent 提问，`doctor`/`ci`/路由护栏也能立刻产生 `operation`/`approval`/`review` 事项。
 
 ---
 
@@ -370,6 +542,8 @@ review / verify 可以检查假设是否被后续证据推翻。这样“先继�
 
 1. **不做全局安装**，只装项目级并写 lock；
 2. **v1 不做 embedding 检索、不做联网自动安装**，与 [09](09-代码检索与知识库.md) 的 R0/R1 边界一致。
+
+skill 的第一个真实使用场景不是“装一堆能力”，而是本地 CI 的 review/检查模板（§4.9）：仓库画像决定推荐什么，lock 保证可复现，静态检查限制权限，L2 评估决定能否从 advisory 升为 gate。
 
 ### 3.2 仓库画像
 
@@ -531,9 +705,29 @@ score = tag_match * 3
 
 ---
 
-## 4. 问题四：初始化与本地 CI bootstrap
+## 4. 问题四：初始化与 agent/harness 驱动的本地 CI
 
-### 4.1 现状
+### 4.1 重新定位
+
+本地 CI **不只是验收 agent 的工作**。它首先是项目自己的仓库级检查面：把格式化、lint、类型检查、单元测试、代码审查、提交信息检查等能在本地完成的动作前移，让 agent 和人都能在 `git commit` / `git push` 之前解决，减少服务器 CI 的重复劳动。
+
+三个层次要分清：
+
+| 层次 | 负责什么 | 权威性 |
+|---|---|---|
+| TaskSpec acceptance | 这个任务是否完成了约定目标 | `loom verify`，任务级权威 |
+| 仓库本地 CI | 这个仓库当前是否健康、能否提交/推送 | `loom ci run`，本地闸门与反馈 |
+| 服务器 CI | 跨平台、集成、发布、安全与合规 | 服务器，最终权威 |
+
+目标不是“用本地替代服务器”，而是：
+
+- 确定性的快速检查在本地跑，失败立刻反馈给 agent 或人；
+- 提交/推送前解决格式、lint、review 能发现的问题；
+- 本地产生可核验的报告/attestation，服务器只重跑必须由可信环境执行的 job；
+- agent 通过同一套命令获得反馈，不需要每个项目重新猜“这里怎么检查”；
+- skills 提供可复用、可验证的检查模板与 review 规则，而不是散落的脚本。
+
+### 4.2 现状
 
 `loom init` 只做：
 
@@ -546,74 +740,155 @@ score = tag_match * 3
 - 每个项目手写 acceptance；
 - agent 不知道“这个仓库的正常检查是什么”；
 - 环境缺 `pnpm`/`cargo`/`just` 时，直到 verify 才失败；
-- 没有 baseline 概念，agent 可能把“本来就红的测试”当成自己改坏。
+- 没有 baseline 概念，agent 可能把“本来就红的测试”当成自己改坏；
+- 格式/lint/提交信息等检查只能在服务器跑，反馈慢、额度浪费；
+- 代码审查依赖人记得做，agent 也没有结构化的 review 入口。
 
-### 4.2 初始化设计
+### 4.3 本地与服务器的分工
+
+| 阶段 | 本地默认做 | 服务器仍应做 |
+|---|---|---|
+| pre-commit | format、lint（可自动修的 safe fix）、类型检查、提交信息、secret/调试残留扫描、diff 规则 | 可信环境下的 secret/许可证/依赖审计复核 |
+| pre-push | 单元测试、build、受影响范围检查、advisory review、baseline 对比 | 平台矩阵、集成/e2e、并发/性能、发布构建 |
+| 任务完成前 | agent 跑 `fast` profile，把失败当观察回灌 | 不适用（verify 仍是 AC 权威） |
+| 发布/合并 | 生成本地报告与 attestation | 签名、制品、部署、合规与最终门禁 |
+
+原则：
+
+- **确定性检查优先**：能用一个命令判断的，不要调用 LLM；
+- **review 先 advisory**：LLM/agent review 默认只给发现，不直接阻断；积累误报率后再考虑升为 gate；
+- **本地证据不是信任边界**：`local_sufficient = true` 的 job 才允许服务器跳过重跑；安全、发布、签名类 job 永远在服务器执行；
+- **不自动提交/推送**：本地 CI 可以修文件和生成报告，但 commit/push 必须由人或显式策略触发。
+
+### 4.4 初始化设计
 
 `loom init` 增加**探测 + 生成 + 报告**，但遵守“不覆盖用户文件”：
 
 1. 扫描仓库，输出 `stack-profile.json`（与 §3.2 共用）；
 2. 生成 `.loom/ci.toml`（已存在则跳过，`--force` 只覆盖 Loom 生成的文件）；
 3. 生成 acceptance 模板（写入 `goal.md` 的注释或 `.loom/acceptance.toml`，不直接改 TaskSpec）；
-4. 生成 CI workflow（可选 `--ci github`，默认不生成）；
-5. 打印 `doctor` 报告：检测到的栈、命令、缺失工具、建议。
+4. 可选安装 git hooks（`--hooks pre-commit,pre-push`，默认不装）；
+5. 可选生成服务器 CI 的薄封装（`--ci github`，默认不生成）：只做 attestation 校验 + server-only jobs，不复制全部本地命令；
+6. 打印 `doctor` 报告：检测到的栈、建议 jobs、缺失工具、可安装的 skills、baseline 状态。
 
 `loom init --dry-run` 只打印计划，不写文件。
 
-### 4.3 `ci.toml`
+### 4.5 `ci.toml`
 
 ```toml
 version = 1
 
+[profiles.pre-commit]
+description = "提交前快速闸门"
+jobs = ["fmt-fix", "commit-msg"]
+
+[profiles.pre-push]
+description = "推送前完整闸门"
+jobs = ["fmt-check", "clippy", "test", "review"]
+
 [profiles.fast]
-description = "提交前快速检查"
-jobs = ["fmt", "clippy"]
+description = "agent finish 前的快速检查"
+jobs = ["fmt-check", "clippy"]
 
 [profiles.full]
 description = "完整验证"
-jobs = ["fmt", "clippy", "test", "build"]
+jobs = ["fmt-check", "clippy", "test", "build", "review"]
 
-[jobs.fmt]
+[jobs.fmt-fix]
+kind = "command"
+cmd = ["cargo", "fmt", "--all", "--", "--check"]
+fix_cmd = ["cargo", "fmt", "--all"]
+safe_fix = true
+timeout_s = 60
+required_tools = ["cargo"]
+
+[jobs.fmt-check]
+kind = "command"
 cmd = ["cargo", "fmt", "--all", "--", "--check"]
 timeout_s = 60
 required_tools = ["cargo"]
 
 [jobs.clippy]
+kind = "command"
 cmd = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
 timeout_s = 600
 required_tools = ["cargo"]
 
 [jobs.test]
+kind = "command"
 cmd = ["cargo", "test", "--workspace"]
 timeout_s = 900
 required_tools = ["cargo"]
 needs = ["clippy"]
 
 [jobs.build]
+kind = "command"
 cmd = ["cargo", "build", "--workspace"]
 timeout_s = 600
 required_tools = ["cargo"]
 needs = ["test"]
+
+[jobs.commit-msg]
+kind = "command"
+cmd = ["loom", "ci", "check-commit-msg", "--file", "{commit_msg_file}"]
+timeout_s = 10
+
+[jobs.review]
+kind = "review"
+diff = "staged"                  # staged | head | range
+rules = ["no-debug-prints", "no-secrets", "minimal-diff"]
+advisory = true
+max_tokens = 6000
+timeout_s = 120
+local_sufficient = false
+
+[jobs.skill-review]
+kind = "skill"
+skill = "rust-review"
+diff = "staged"
+advisory = true
+max_tokens = 8000
+timeout_s = 120
 ```
 
 约束：
 
 - `cmd` 用 argv 数组，避免 shell 引号与注入；确实需要 shell 时用 `shell = "..."` 显式声明；
-- `timeout_s` 必填；
-- `required_tools` 在运行前检查，缺失直接给出可行动的报错；
+- `timeout_s` 必填；`required_tools` 在运行前检查，缺失直接给出可行动的报错；
 - `needs` 先做顺序依赖，不做并行（M4 前）；
+- `kind = "command"` 是默认；`review` 调用有界 agent review；`skill` 加载 §3 的已验证 skill；
+- `fix_cmd` 只允许确定性、可逆的修复；必须显式 `safe_fix = true`，执行后展示 diff，不自动提交；
+- `advisory = true` 表示发现只作为建议/attention 事项，不阻断提交；升为 gate 需要评估；
+- `local_sufficient = true` 才允许服务器基于本地 attestation 跳过该 job；默认 false，安全/发布类永远 false；
 - 允许 `env`，但默认清空 `LOOM_API_KEY` / `OPENAI_API_KEY` 等 secret；
 - 日志写 `.loom/ci/<run_id>/<job>.log`，按 8KB/24KB 预算截断后回给 agent，全文留 artifact。
 
-### 4.4 命令
+全局配置（`.loom/config.toml`）：
+
+```toml
+[ci]
+default_profile = "fast"
+preflight = "off"           # off | fast
+hooks_fix_safe = true       # pre-commit 先跑 safe_fix，再重跑检查
+hooks_fail_open = true      # loom 不在 PATH 时是否放行
+attestation = true
+sign = "none"               # none | ed25519
+```
+
+### 4.6 命令
 
 ```bash
-loom init --dry-run                 # 只看探测结果
-loom ci plan                        # 探测并打印建议的 jobs + 证据
-loom ci plan --write                # 写 .loom/ci.toml（不覆盖已有）
-loom ci run --profile fast          # 顺序执行，JSON/pretty
-loom ci run --profile fast --changed # 只跑受影响 job（后续）
-loom ci doctor                      # 工具链、版本、缺失命令、baseline 状态
+loom init --dry-run                       # 只看探测结果
+loom ci plan                              # 探测并打印建议的 jobs + 证据 + 推荐 skills
+loom ci plan --write                      # 写 .loom/ci.toml（不覆盖已有）
+loom ci run --profile pre-commit          # 提交前闸门
+loom ci run --profile pre-push --changed  # 推送前检查（affected-only 后续）
+loom ci run --profile fast --fix          # 只执行 safe_fix job，展示 diff
+loom ci install-hooks --profile pre-commit,pre-push
+loom ci remove-hooks
+loom ci doctor                            # 工具链、版本、缺失命令、baseline、hook 状态
+loom ci report --last                     # 最近一次报告摘要（token 有界）
+loom ci verify-attest <file>              # 校验本地报告/attestation，不重跑
 ```
 
 `loom ci run` 输出：
@@ -621,79 +896,169 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
 ```json
 {
   "v": 1,
-  "profile": "fast",
+  "profile": "pre-commit",
   "ok": false,
+  "tree": "git-tree-sha",
+  "tool_versions": {"cargo": "1.99.1"},
   "jobs": [
-    {"id": "fmt", "exit": 0, "duration_ms": 120, "log": ".loom/ci/R-1/fmt.log"},
-    {"id": "clippy", "exit": 101, "duration_ms": 8300, "log": ".loom/ci/R-1/clippy.log"}
+    {"id": "fmt-fix", "kind": "command", "exit": 0, "duration_ms": 120, "fixed": true, "log": ".loom/ci/R-1/fmt-fix.log"},
+    {"id": "commit-msg", "kind": "command", "exit": 1, "duration_ms": 5, "log": ".loom/ci/R-1/commit-msg.log"}
   ],
-  "failed": ["clippy"]
+  "failed": ["commit-msg"],
+  "report": ".loom/ci/R-1/report.json",
+  "attestation": ".loom/ci/R-1/attestation.json"
 }
 ```
 
-### 4.5 与 dispatch / verify 的关系
+报告/attestation 至少记录：`tree`、命令 argv、工具版本、开始/结束时间、退出码、日志 hash、`local_sufficient`、是否 `--no-verify` 绕过。签名可选（`sign = "none|ed25519"`），但**未签名不等于可信**。
 
-- **baseline 预检**：`[ci] preflight = "fast" | "off"`。默认 `off`，避免老仓库第一次接入就被红基线卡住；开启后，`loom dispatch` 在派发前跑 fast profile，红了就拒绝并提示“先修 baseline 或加 `--allow-red-baseline`”。
-- **native 提示**：system prompt 明确“finish 前运行 `loom ci run --profile fast`”，失败输出作为工具观察回灌；不替代 verify。
-- **verify 仍是权威**：`loom verify` 只跑 TaskSpec 的 acceptance，不从 `ci.toml` 推断 AC；`ci.toml` 是仓库级检查，TaskSpec acceptance 是任务级契约。
-- **acceptance 模板**：`loom init` 可从 `ci.toml` 生成候选 AC（如 `cargo test --workspace`），由人确认后写入 TaskSpec，而不是自动生效。
+### 4.7 git hooks
 
-### 4.6 技术栈探测
+- 只由 `loom ci install-hooks` 显式安装，不静默改 `.git/hooks` 或全局 `core.hooksPath`；
+- 写入带 `# loom-ci-managed` 标记的 `pre-commit` / `pre-push`；
+- 已存在非 Loom 管理的 hook：默认拒绝；`--force` 先备份为 `<hook>.bak.<timestamp>`，再安装；
+- pre-commit 默认跑 `pre-commit` profile，目标 ≤ 30 秒；pre-push 默认跑 `pre-push` profile，目标 ≤ 5 分钟；超时/长任务留给服务器；
+- `hooks_fix_safe = true` 时，pre-commit 先对 `safe_fix` job 执行修复并重跑检查；若工作区被改动，hook 退出 `1` 并提示重新 `git add`，**不自动 stage、不自动 commit**；
+- hook 失败即阻断提交/推送；`git commit --no-verify` 仍可用，但写入 `.loom/ci/bypass.jsonl`（hook、tree、时间），并在 `loom ci report` 标记 `unattested`；
+- `loom` 不在 PATH 时，默认 fail-open 并警告（避免破坏新克隆），但记录；可配置 `hooks_fail_open = false`；
+- hook 只调用公开 CLI，不直接 import 内部 crate。
 
-| 证据 | 建议 jobs |
+### 4.8 agent / harness 循环
+
+```text
+agent 改代码
+   │
+   ├─ loom ci run --profile fast
+   │     ├─ pass ──► 继续 / finish
+   │     └─ fail ──► 失败摘要作为工具观察回灌
+   │                  ├─ 确定性错误：agent 修，重跑（有界）
+   │                  ├─ safe fix：loom ci run --fix，展示 diff
+   │                  └─ review/判断类：开 attention review 事项
+   ▼
+loom verify（TaskSpec acceptance，仍是任务权威）
+```
+
+- **native 提示**：system prompt 明确“finish 前运行 `loom ci run --profile fast`”；失败输出按工具预算截断后回灌；不替代 verify；
+- **baseline 预检**：`[ci] preflight = "fast" | "off"`，默认 `off`；开启后 `loom dispatch` 在派发前跑 fast profile，红了就拒绝并提示“先修 baseline 或加 `--allow-red-baseline`”；
+- **review job**：先跑确定性规则（debug 残留、secret 模式、超大 diff、生成物未更新），再可选调用 agent；发现写成结构化 `findings`，默认进 attention `review`，不直接改代码；
+- **验收模板**：`loom init` 可从 `ci.toml` 生成候选 AC（如 `cargo test --workspace`），由人确认后写入 TaskSpec，而不是自动生效；
+- **服务器消费**：服务器 workflow 调 `loom ci verify-attest`，只跳过 `local_sufficient = true` 的 job；安全/发布/签名、跨平台矩阵、e2e 永远重跑。来自 fork 或不可信机器的 attestation 不作为跳过依据。
+
+### 4.9 与 skills 的衔接
+
+本地 CI 是把 skills 用起来的早期落点，但要防止 skill 变成绕过检查的后门：
+
+| 用法 | 说明 |
 |---|---|
-| `Cargo.toml` | `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test --workspace`、`cargo build --workspace` |
-| `package.json` + lock | 按 lock 选 `pnpm/yarn/npm`；`lint`、`typecheck`、`test`、`build`（只取存在的 script） |
-| `pyproject.toml` | `ruff check`、`mypy`/`pyright`、`pytest`（按配置） |
-| `go.mod` | `gofmt -l`、`go vet ./...`、`go test ./...` |
-| `Makefile` / `justfile` | 优先采纳已有的 `check`/`test`/`lint` target；不重复造 |
-| `.github/workflows/*.yml` | 只提取可识别的命令作为**证据**，不强行解析 YAML；无法确定时给建议不写配置 |
-| `rust-toolchain.toml` / `.nvmrc` / `.python-version` | 记录版本要求；doctor 检查当前版本是否匹配 |
-| `Containerfile` / `compose.yaml` | 记录为环境证据；v1 不自动嵌套容器 |
+| `loom ci plan` 推荐 skill | 根据 §3.2 仓库画像，推荐 `rust-review`、`conventional-commit`、`secret-scan` 等；输出 `why` 与证据 |
+| `kind = "skill"` job | 只加载已安装、已静态检查、在 `skills.lock` 中的 skill；正文受 4KB/8KB 预算 |
+| review 规则模板 | skill 提供检查清单/规则，但确定性规则仍优先；LLM 只做判断与解释 |
+| 本地修复建议 | skill 可以建议 patch，但必须通过 `edit`/`patch` 工具落到 diff，不能直接执行任意脚本 |
+| 晋升 | advisory review 的误报率、采纳率、CPVT 影响通过 §3.7 的 L2 评估后再考虑 gate |
 
-探测不到时：只写注释模板，不猜命令。
+硬约束：
 
-### 4.7 环境与安全
+- skill **不能**关闭/降低已有 job 的 `local_sufficient` 或 `advisory`；
+- skill **不能**声明未在 `ci.toml` 中出现的任意 shell 命令；需要命令就走 `kind = "command"` 并接受同样的超时/权限/静态检查；
+- skill **不能**修改 TaskSpec/AC/预算；
+- 无网络、无 shell 是默认；需要时在 `ci.toml` 显式声明，不由 skill 自行决定；
+- 安装/升级 skill 要更新 lock；CI 运行不使用浮动分支。
+
+### 4.10 技术栈探测
+
+| 证据 | 建议 jobs | 服务器保留 |
+|---|---|---|
+| `Cargo.toml` | `cargo fmt --check`、`cargo clippy -D warnings`、`cargo test --workspace`、`cargo build --workspace` | 跨平台/MSRV 矩阵、集成测试 |
+| `package.json` + lock | 按 lock 选 `pnpm/yarn/npm`；`lint`、`typecheck`、`test`、`build`（只取存在的 script） | e2e、浏览器矩阵、发布构建 |
+| `pyproject.toml` | `ruff check`、`mypy`/`pyright`、`pytest`（按配置） | 多 Python 版本、集成 |
+| `go.mod` | `gofmt -l`、`go vet ./...`、`go test ./...` | race、跨平台、集成 |
+| `Makefile` / `justfile` | 优先采纳已有的 `check`/`test`/`lint` target；不重复造 | 视内容 |
+| `.github/workflows/*.yml` | 只提取可识别的命令作为**证据**，不强行解析 YAML；无法确定时给建议不写配置 | 原有 workflow 保留 |
+| `rust-toolchain.toml` / `.nvmrc` / `.python-version` | 记录版本要求；doctor 检查当前版本是否匹配 | 矩阵可覆盖 |
+| `Containerfile` / `compose.yaml` | 记录为环境证据；v1 不自动嵌套容器 | 容器化集成 |
+
+探测不到时：只写注释模板，不猜命令。review 规则同理：只给通用规则（debug 残留、secret 模式、超大 diff），不凭猜测生成领域规则。
+
+### 4.11 环境与安全
 
 - v1 在**当前环境**执行，不启动嵌套容器；容器内缺工具时明确报错，不静默跳过；
 - 命令来自仓库配置，视为可信；仍要清空 provider secret、限制输出、设置超时；
 - 默认不联网；需要联网的 job 显式 `network = true`；
 - 写操作只允许在仓库内；不跟随 symlink 到仓库外；
-- 不完全替换现有 CI：只补本地入口，GitHub Actions 仍可独立存在。
+- `--fix` 只允许 `safe_fix = true` 的 job；执行后保留 diff，不自动 commit/push；
+- 本地报告可能包含代码片段和日志：按 artifact 管理，写前做 secret 模式检查/截断；
+- git hooks 显式安装、可卸载、可备份；不改全局 git 配置；
+- attestation 只是“某个环境跑过这些命令”的证据，不是安全边界；不可信来源不享受跳过；
+- 不完全替换现有 CI：只补本地入口与服务器跳过协议，GitHub Actions 等仍可独立存在。
 
-### 4.8 可行性
+### 4.12 观测
+
+`loom ci stats`：
+
+- 本地各 profile 的运行次数、通过率、P50/P95 墙钟；
+- `safe_fix` 触发次数、agent 修复后重跑次数、首过率；
+- `--no-verify` 绕过的次数与对应 tree；
+- review findings 数量、采纳/拒绝/误报率；
+- 服务器 CI 被跳过的 job 与节省的分钟数（按 attestation 统计）；
+- CI 失败产生的 attention 事项与处理时延。
+
+目标函数是**减少服务器 CI 的重复工作并缩短反馈回路**，不是单纯把本地命令跑得更多。
+
+### 4.13 可行性
 
 | 部分 | 可行性 | 说明 |
 |---|---|---|
 | 探测 + 生成 ci.toml | **高** | 规则明确，`--dry-run` 可先验证 |
 | 顺序执行 + 日志预算 | **高** | 复用现有工具输出协议 |
+| pre-commit/pre-push hooks | **高** | 纯 shell/CLI 包装；注意备份与 fail-open |
+| safe fix + diff 展示 | **高** | 只限确定性命令；不自动提交 |
+| 本地 report/attestation | **中** | 格式与 tree 校验容易；信任模型需明确 |
+| review job（agent） | **中** | 质量/误报率需真实任务集；默认 advisory |
+| skill 化 review/检查 | **中** | 依赖 §3 的 lock/静态检查；不能绕过 gate |
 | baseline 预检 | **中** | 老仓库红基线常见，默认应关闭 |
 | 环境一致性 | **中** | 容器/版本漂移；v1 只检测不修复 |
 | monorepo / 多栈 | **中** | 等 M5 工作区设计；v1 按根目录单栈 |
+| 服务器按 attestation 跳过 | **中** | 仅 `local_sufficient`；不可信来源不跳过 |
 | 嵌套容器 | **低** | 当前 dev 已用 podman/docker，嵌套复杂；后置 |
 
-结论：**先做探测 + `ci.toml` + 顺序 `loom ci run` + doctor；并行、缓存、容器化、affected-only 后置。**
+结论：**先做探测 + `ci.toml` + 顺序 `loom ci run` + doctor；再做 hooks、safe fix、report/attestation；review/skill job 先 advisory。并行、缓存、容器化、affected-only 后置。**
+
+### 4.14 验收（未来实现时）
+
+- [ ] `loom init` 在本仓库识别 Rust workspace，生成 `ci.toml`，且不覆盖已有文件。
+- [ ] `loom ci run --profile pre-commit` 在格式错误时失败，`--fix` 只修 `safe_fix` job 并展示 diff。
+- [ ] `hooks_fix_safe = true` 时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
+- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；`--no-verify` 被记录。
+- [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败。
+- [ ] 服务器 workflow 只跳过 `local_sufficient = true` 的 job；安全/发布/矩阵不被跳过。
+- [ ] review job 有 token/时间上限，默认 advisory，findings 结构化；无网络。
+- [ ] `kind = "skill"` 只能加载 lock 内、通过静态检查的 skill，不能关闭 gate。
+- [ ] CI 失败开 attention `review`/`operation` 事项；同 tree 成功后自动 resolve。
+- [ ] `loom verify` 行为不变，仍只以 TaskSpec acceptance 为任务权威。
 
 ---
 
 ## 5. 横向契约变更
 
-四项都会新增文件/命令，但共享一组边界。按 `AGENTS.md` §4，任何事件/字段变更都要同步类型、schema、文档、测试。
+这些方向都会新增文件/命令，但共享一组边界。按 `AGENTS.md` §4，任何事件/字段变更都要同步类型、schema、文档、测试。
 
 | 方向 | 新增 artifact | 新增事件 | 配置 | CLI |
 |---|---|---|---|---|
 | churn | `logs/churn.json`（新 schema） | `task.churn`（仅干预时） | `[guardrails.churn]` | `loom churn stats` |
-| questions | `outbox/questions.json`、`answers.json`、`assumptions.jsonl` | `task.needs_input`、`task.answered` | `[questions]` | `loom inbox`、`loom answer` |
+| attention | `.loom/inbox.json`（只读视图） | `attention.opened`、`attention.updated`、`attention.resolved`、`attention.expired` | `[attention]` | `loom inbox [--line/--check]`、`loom inbox ack/defer/resolve` |
+| questions | `outbox/questions.json`、`answers.json`、`assumptions.jsonl` | `task.needs_input`、`task.answered` | `[questions]` | `loom answer` |
 | skills | `stack-profile.json`、`skills.catalog.json`、`skills.lock` | 无（skill 加载不是任务状态） | `[skills]` | `loom skill scan/recommend/add/show/verify/stats` |
-| CI | `.loom/ci.toml`、`.loom/ci/<run>/` | 无（job 结果进 artifact/回执） | `[ci]` | `loom ci plan/run/doctor` |
+| CI | `.loom/ci.toml`、`.loom/ci/<run>/{report,attestation}.json`、`bypass.jsonl` | `attention.*`（失败/待复核时） | `[ci]` | `loom ci plan/run/doctor/install-hooks/report/verify-attest/stats` |
 
 共同约束：
 
-- **状态仍由事件重放**：churn/questions 的 artifact 是证据，不是状态事实源；状态变化必须写事件。
+- **状态仍由事件重放**：churn/questions/attention 的 artifact 是证据或视图，不是状态事实源；状态变化必须写事件。
 - **不新增交互式命令**：`loom inbox/answer` 是批处理，不进入等待循环。
+- **固定角落不污染机器输出**：footer 只写 stderr 且仅 TTY；`--json` 的 stdout 保持纯 JSON；非 TTY/CI 默认关闭。
 - **不改变退出码语义**：`0` 成功、`2` 需要人工/阻塞、`3` 预算/超时、`4` adapter 失败；`churn_guard` / `needs_input` 都是 `2`，用事件 `data.code` 区分。
-- **上下文硬预算不变**：churn 摘要、问题、skill 正文都受 8KB/24KB/128KB 与 Context Compiler 约束。
-- **不依赖真实模型即可测试**：前三项都能用 mock/native 脚本化 provider 覆盖。
+- **上下文硬预算不变**：churn 摘要、问题、skill 正文都受 8KB/24KB/128KB 与 Context Compiler 约束；attention 默认不进模型上下文。
+- **本地 CI 不是信任边界**：只有 `local_sufficient` 的 job 可被服务器跳过；安全/发布/签名永远在服务器执行。
+- **不依赖真实模型即可测试**：attention/questions/CI 核心、churn 的投影都能用 mock/native 脚本化 provider 覆盖；review job 的模型部分单独标 advisory。
 - **churn 的 KPI 是 `wasted_tokens_est` / `wasted_cost_usd_est`，不是写入次数**：`write_passes` / `churn_ratio` 只用于解释原因；L2 拦截不是主要节省手段。
 - **churn 优化的是 `messages` 投影与工具形态**（patch/edit），不改变 provider 的 wire 协议。
 
@@ -703,19 +1068,23 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
 
 | 顺序 | 方向 | 为什么先做 | 依赖 | 粗略工作量 |
 |---|---|---|---|---|
-| P0 | CI bootstrap | 让 verify/acceptance 可信；后续度量都靠它 | 无 | 3–5 人日 |
-| P0 | question protocol | 修 `needs_input → task.failed` 的正确性缺陷 | 无 | 3–4 人日 |
+| P0 | CI 核心：init 探测 + `ci.toml` + 顺序 `loom ci run` + doctor | 让“本地检查”先有统一入口；后续度量与 hooks 都靠它 | 无 | 3–4 人日 |
+| P0 | question protocol + attention inbox | 修 `needs_input → task.failed` 的正确性缺陷；同时解决人工事项被历史淹没 | 无 | 4–5 人日 |
+| P1 | CI 前移：pre-commit/pre-push hooks + safe fix + report | 把格式/lint/提交信息挡在提交前，直接减少服务器重复工作 | CI 核心 | 3–4 人日 |
 | P1 | churn：native 步骤级上下文重编译 + patch-first + token 归因 | 先切断旧全文的输入复利，再谈拦截；指标必须先于策略 | 无 | 4–6 人日 |
 | P1 | churn watchdog（外部 adapter） | 只做 gross loop 止损与选型依据 | 容器内需有 adapter 二进制 | 2–3 人日 |
-| P2 | skills：scan + 本地 catalog + lock + 按需加载 | 结构先立起来，避免全局安装 | CI/任务集 | 5–8 人日 |
-| P2 | skills：L2 评估与晋升 | 证明 skill 真的有用 | 真实模型 + 固定任务集 + 账单 | 后置 |
-| P3 | 图案/embedding/联网目录 | 收益未证明 | — | 不做 |
+| P2 | CI review/skill job + attestation/服务器跳过 | 把 review 与可复用检查模板纳入；先 advisory | CI 前移 + skills | 3–5 人日 |
+| P2 | skills：scan + 本地 catalog + lock + 按需加载 | 结构先立起来，避免全局安装；CI 是首个使用场景 | CI/任务集 | 5–8 人日 |
+| P2 | skills：L2 评估与晋升 | 证明 skill 真的有用；review advisory→gate 也靠它 | 真实模型 + 固定任务集 + 账单 | 后置 |
+| P3 | embedding/联网目录 | 收益未证明 | — | 不做 |
 
 注意：
 
 - 当前没有并发/锁，P2 的“父子 agent 不等待”只定义协议，不实现并行调度；M4 再做。
 - 真实 goose/OpenCode canary 仍受二进制与 API key 阻塞，见 [14](14-当前问题与卡点.md)。
 - churn 优化的是 `messages` 投影与工具形态，不改 provider 请求格式；外部 adapter 只能观察 worktree，不能逐步投影。
+- attention inbox 不依赖真实模型，应和 question protocol 一起先做；否则即使 `needs_input` 修对了，用户仍然找不到待办。
+- CI 前移与服务器跳过是两步：先本地跑起来，再谈 attestation；不要在没有可信 tree/工具版本记录前就跳过服务器检查。
 
 ---
 
@@ -726,6 +1095,11 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
 - 不做 embedding/向量库、MCP 跨项目知识库。
 - 不做交互式提问等待；提问必须是文件 + 退出码。
 - 不为每个问题调用一次 LLM 分类；先走确定性策略。
+- 不把 attention inbox 做成聊天/工单系统，也不做常驻 daemon；v1 只做事件 + 视图 + 只读轮询。
+- 不自动执行 inbox 里的 `actions[].cmd`；不自动关闭 `blocking` 事项，不用 `acked` 冒充 `resolved`。
+- 不静默安装 git hooks，不修改全局 git 配置；`--no-verify` 必须留痕。
+- 不用本地 CI 替代服务器安全/发布/签名门禁；不信任未签名或来源不明的 attestation。
+- 不让 skill 直接定义任意 CI shell 命令或关闭已有 gate；命令必须出现在 `ci.toml` 并接受同样的检查。
 - 不做嵌套容器 CI（v1）。
 - 不把 churn 直接归因于某个模型；先积累按模型的度量。
 - 不自动修改 AC/目标来“让任务通过”；AC 变更必须走 judgment/人工。
@@ -748,15 +1122,36 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
    - 倾向默认关，项目稳定后再开，避免接入摩擦。
 7. 父子 agent 的问题上浮是否需要独立“问题预算”？
    - 需要；否则回答可能吃掉任务预算，建议单独记账并设上限。
+8. attention 的固定角落在 CLI 里首选哪种形态？
+   - 倾向“TTY 时每条命令的 stderr footer + `loom inbox --line` 给 statusline”；TUI/桌面端后置，避免先做一个没人看的界面。
+9. `attention.*` 是全量显式事件，还是只给非任务来源、任务来源由投影器派生？
+   - 倾向任务事件照常写，同时显式写 `attention.*`，保持“任务状态”和“人看到什么”两个维度；但要防重复，需在投影器做幂等。
+10. pre-commit 在 `loom` 缺失时 fail-open 还是 fail-closed？
+    - 倾向 fail-open + 警告 + 记录，避免新克隆无法提交；服务器仍做最终门禁。
+11. 哪些 CI job 可以标 `local_sufficient = true`？
+    - 倾向只限 format/lint/单元测试等确定性、低环境依赖项；安全、发布、签名、跨平台矩阵永远 false。
+12. review job 从 advisory 升为 gate 的阈值？
+    - 需要误报率、采纳率、人工复核与固定任务集数据；当前没有，所以先 advisory。
+13. skill 提供的 CI job 模板是否需要独立签名/策展源？
+    - 倾向需要；至少 lock + 静态检查 + 项目级安装，不能直接引用浮动分支。
 
 ---
 
 ## 9. 最小验收清单（未来实现时）
 
-- [ ] `loom ci plan --dry-run` 能在本仓库识别 Rust workspace，并给出 fmt/clippy/test/build 与证据。
-- [ ] `loom init` 不覆盖已有 `ci.toml` / workflow；`--dry-run` 无写操作。
+- [ ] `loom ci plan` 能在本仓库识别 Rust workspace，并给出 fmt/clippy/test/build 与证据。
+- [ ] `loom init` 不覆盖已有 `ci.toml` / workflow / hook；`--dry-run` 无写操作。
 - [ ] 缺 `cargo`/`pnpm` 时 `loom ci doctor` 给出可行动报错，而不是静默跳过。
+- [ ] `loom ci run --profile pre-commit` 在格式错误时失败；`--fix` 只修 `safe_fix` job 并展示 diff，不自动提交。
+- [ ] `hooks_fix_safe` 生效时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
+- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；`--no-verify` 写入 `bypass.jsonl`。
+- [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；服务器只跳过 `local_sufficient` job。
+- [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。
+- [ ] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。
+- [ ] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。
+- [ ] 人类命令在 TTY 下 stderr 出现一行 footer；`--json` stdout 不含 footer；非 TTY/CI 不打印；`LOOM_NO_INBOX=1` 可关闭。
+- [ ] `loom inbox` 同时显示问题与操作类事项；`loom inbox --check` 在存在 `blocking` 时退出 `2`；`ack` 不关闭事项，`defer` 只作用于 `soon/info`。
 - [ ] 脚本化 provider 调用 `ask` 工具 → `questions.json` → exit 2 → `loom inbox` 可见 → `loom answer` → 新 run 收到答案并通过 verify。
 - [ ] 脚本化 provider 对同一 8KB 文件连续重写 5 次；无投影时 input 随步数复利增长，有投影时有界。
 - [ ] `churn.json` 输出 `rewrite_output_tokens`、`history_carry_tokens`、`avoided_input_tokens`、`wasted_tokens_est`，并标 `estimated`。
