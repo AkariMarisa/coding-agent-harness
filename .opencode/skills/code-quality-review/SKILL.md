@@ -1,6 +1,6 @@
 ---
 name: 代码质量与架构审查
-description: "Use only when the user explicitly asks to review/audit code, check architecture/module boundaries/dependency direction/cycles, find code smells, or evaluate a refactor. Do not use for ordinary feature work, every code edit, formatting/lint, or single-line bug fixes."
+description: "Use when asked to review/audit code, check architecture/module boundaries/dependency cycles, find code smells, or evaluate a refactor. Do not use for feature work, routine edits, formatting/lint, or single-line fixes."
 ---
 
 # Code Quality Review
@@ -21,6 +21,11 @@ Do not load it for:
 - Formatting, import order, or lint issues. Use the formatter/linter instead.
 - Single-line correctness bugs. Use the normal debugging path.
 
+Handoff:
+
+- If the user wants the findings **applied**, use `refactor-code`. This skill reports; it does not refactor.
+- If the user wants to **design** new boundaries or interfaces, not review existing ones, use `architecture-design`.
+
 ## Scope
 
 - Architecture: module boundaries, dependency direction, cycles, layer breaches, shared mutable state, duplicate sources of truth, god modules, shallow modules, leaked internals.
@@ -34,9 +39,9 @@ Out of scope: formatting/lint, deep security review, performance profiling, and 
 1. **Define the scope.** If a diff/PR/branch is named, pin the base and use `git diff <base>...HEAD` plus `git log <base>..HEAD --oneline`. If a module is named, identify its entry points and direct callers. If nothing is named, ask or default to the current diff; do not scan the whole repo by default.
 2. **Read the project rules.** `AGENTS.md`, `CONTRIBUTING.md`, ADRs, design docs, and formatter/lint configs. A documented repo rule overrides generic advice.
 3. **Build evidence.** Read imports, call sites, tests, and data ownership. Do not infer architecture from folder names alone.
-4. **Choose a mode.** Use `architecture`, `smells`, or `refactor` from the sections below. A review may use more than one, but keep the report separated.
+4. **Choose a mode.** Use `architecture`, `smells`, or `refactor proposal` from the sections below. A review may use more than one, but keep the report separated.
 5. **Report findings.** Use file:line, evidence, why it matters, and a concrete remedy. Mark confidence.
-6. **Only edit code when the user asks.** If asked, propose the smallest safe plan first, then make incremental changes and run the project checks.
+6. **Only edit code when the user asks.** If asked to apply the fix, hand off to `refactor-code` and keep this review read-only unless the user explicitly wants a combined review-and-fix pass. Then propose the smallest safe plan first, make incremental changes, and run the project checks.
 
 ## Mode: architecture
 
@@ -59,15 +64,19 @@ Use the baseline in `references/smells.md`. Two rules bind it:
 
 Focus on the changed code or the named module. Do not produce a repo-wide smell inventory unless asked.
 
-## Mode: refactor
+## Mode: refactor proposal review
 
-- Understand why the code exists before changing it (Chesterton's Fence).
-- Preserve behavior exactly unless the task explicitly changes behavior.
-- Prefer the smallest change that removes a current obligation.
-- Separate refactoring from feature work. Do not mix a rename, a move, and a new behavior in one diff.
-- Add or run tests before and after. If tests are missing, say what cannot be verified.
-- Do not do drive-by refactors outside the agreed scope.
-- A refactor that relocates the same complexity is not an improvement; prefer one that removes branches, modes, or layers.
+Use this mode to judge a proposed or already-written refactor, not to perform one:
+
+- Does it actually preserve observable behavior, error semantics, ordering, and performance?
+- Is there a safety net? If not, name the missing characterization test.
+- Is the change incremental, or a big-bang rewrite?
+- Is refactoring separated from feature work?
+- Does it remove a current obligation, or only relocate the same complexity?
+- Is the scope limited to the agreed target, or are there drive-by edits?
+- If tests are missing, say what cannot be verified.
+
+To apply the refactor, hand off to `refactor-code`.
 
 ## Output format
 

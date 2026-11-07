@@ -1,6 +1,6 @@
 ---
 name: 代码格式化
-description: "Use only when the user explicitly asks to format or check formatting, or when the target files are Rust/YAML/SQL/JSON/Markdown/Shell and the project already has formatter config. Do not auto-use for ordinary code edits, commits, lint, tests, or semantic fixes."
+description: "Use when asked to format or check formatting, or when the task is specifically formatting Rust/YAML/SQL/JSON/Markdown/Shell/TOML files that already have formatter config. Do not use for ordinary edits, commits, lint, or tests."
 ---
 
 # Code Formatting

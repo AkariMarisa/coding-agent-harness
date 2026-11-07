@@ -1,6 +1,6 @@
 ---
 name: 文档写作与去 AI 味
-description: "Use only when creating or substantially rewriting Markdown docs (README, design docs, ADRs, reports, release notes), or when the user explicitly asks to deslop/humanize/polish/format prose. Do not use for normal chat replies, code comments, or short factual answers."
+description: "Use when creating or substantially rewriting Markdown docs (README, design docs, ADRs, reports, release notes), or when asked to deslop/humanize/polish prose. Do not use for chat replies, code comments, or short factual answers."
 ---
 
 # Docs Writing
