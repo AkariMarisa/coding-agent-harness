@@ -12,7 +12,10 @@ use serde_json::json;
 
 use super::context_cmd::{default_kind, default_prompt_role, load_failure_pack};
 use super::route_cmd::plan_with_config;
-use super::run_util::{find_run_for_task, git_head, new_run_id, prepare_workspace, write_run_meta};
+use super::run_util::{
+    append_blocked_event, find_run_for_task, git_head, new_run_id, prepare_workspace,
+    write_run_meta,
+};
 use super::Format;
 
 #[derive(Debug, Clone)]
@@ -52,10 +55,14 @@ pub(crate) fn prepare(
     let status = task_status(project, task_id)?;
     if !matches!(
         status,
-        TaskStatus::Pending | TaskStatus::Ready | TaskStatus::Failed | TaskStatus::Escalated
+        TaskStatus::Pending
+            | TaskStatus::Ready
+            | TaskStatus::Blocked
+            | TaskStatus::Failed
+            | TaskStatus::Escalated
     ) {
         anyhow::bail!(
-            "task {task_id} is {}; dispatch only accepts pending/ready/failed/escalated tasks",
+            "task {task_id} is {}; dispatch only accepts pending/ready/blocked/failed/escalated tasks",
             status.as_str()
         );
     }
@@ -202,6 +209,61 @@ pub(crate) fn dispatch(
         run_id,
         args.attempt,
     )?;
+
+    // M4: hold the task's write set before any dispatch event. A conflicting
+    // lock or a full parallel budget records `task.blocked` and stops, so a
+    // second writer never starts.
+    let config = project.load_config()?;
+    let lease_s = attempt.spec.budget.max_wall_s.saturating_add(600);
+    let locks = match loom_store::LockGuard::acquire(
+        project,
+        &args.task_id,
+        &attempt.run.id,
+        &attempt.spec.workspace.allowed_paths,
+        lease_s,
+    ) {
+        Ok(guard) => guard,
+        Err(loom_store::LockError::Conflict(conflict)) => {
+            append_blocked_event(
+                project,
+                &attempt.run.id,
+                &args.task_id,
+                args.attempt,
+                vec![
+                    ("code", json!("lock_owner")),
+                    ("lock_owner", json!(conflict.held.owner_task)),
+                    ("lock_run", json!(conflict.held.owner_run)),
+                    ("lock_path", json!(conflict.held.path)),
+                    ("detail", json!(conflict.to_string())),
+                ],
+            )?;
+            anyhow::bail!("task {} blocked by path lock: {conflict}", args.task_id);
+        }
+        Err(loom_store::LockError::Io(error)) => return Err(error),
+    };
+
+    let owners = loom_store::live_lock_owners(project)?;
+    if owners.len() > config.parallel.max_running {
+        // `locks` drops on return and releases the write set again.
+        append_blocked_event(
+            project,
+            &attempt.run.id,
+            &args.task_id,
+            args.attempt,
+            vec![
+                ("code", json!("parallel_cap")),
+                ("running", json!(owners)),
+                ("max_running", json!(config.parallel.max_running)),
+            ],
+        )?;
+        anyhow::bail!(
+            "task {} blocked: {} tasks already running (parallel.max_running = {})",
+            args.task_id,
+            owners.len(),
+            config.parallel.max_running
+        );
+    }
+    let _locks = locks;
 
     // Routing is decided once, from the first plan. Failover stays inside that
     // tier, keeps the same attempt number, and never re-runs escalation.

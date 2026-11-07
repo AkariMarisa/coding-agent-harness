@@ -1243,6 +1243,26 @@ fn doctor(project: &Project) -> Result<i32> {
             Ok(()) => check("writable", true, ".loom/"),
             Err(error) => check("writable", false, &error.to_string()),
         }
+
+        // `doc/03` §13: leftover locks are cleaned here; a lock whose lease
+        // expired while the owner is still alive needs a human.
+        match loom_store::reclaim_stale_locks(project) {
+            Ok(reclaimed) => {
+                let held = loom_store::read_locks(project).unwrap_or_default();
+                let stuck = held.iter().filter(|lock| lock.is_stuck(now_ms())).count();
+                check(
+                    "locks",
+                    stuck == 0,
+                    &format!(
+                        "{} held, {} reclaimed, {} stuck",
+                        held.len(),
+                        reclaimed.len(),
+                        stuck
+                    ),
+                );
+            }
+            Err(error) => check("locks", false, &error.to_string()),
+        }
     }
 
     Ok(if healthy { 0 } else { 1 })

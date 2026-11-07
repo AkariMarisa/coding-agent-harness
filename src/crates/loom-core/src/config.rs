@@ -19,6 +19,22 @@ pub struct Config {
     pub models: Vec<ModelCapability>,
     /// Role/tier mapping, escalation, and cost guardrails.
     pub routing: RoutingConfig,
+    /// How many tasks may hold path locks (i.e. actually run) at once.
+    pub parallel: ParallelConfig,
+}
+
+/// M4 starts at 2 parallel workers; 3+ needs an A/B showing WPT/CPVT do not
+/// regress (`doc/05` §6).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ParallelConfig {
+    pub max_running: usize,
+}
+
+impl Default for ParallelConfig {
+    fn default() -> Self {
+        Self { max_running: 2 }
+    }
 }
 
 impl Default for Config {
@@ -28,6 +44,7 @@ impl Default for Config {
             tools: ToolsConfig::default(),
             models: Vec::new(),
             routing: RoutingConfig::default(),
+            parallel: ParallelConfig::default(),
         }
     }
 }
@@ -81,6 +98,11 @@ impl Config {
         self.routing
             .validate(&self.models)
             .map_err(ConfigError::Validation)?;
+        if self.parallel.max_running == 0 {
+            return Err(ConfigError::Validation(
+                "parallel.max_running must be >= 1".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -124,6 +146,22 @@ mod tests {
         assert!(config.models.is_empty());
         assert_eq!(config.routing.escalate_after_failures, 2);
         assert_eq!(config.routing.max_escalations_per_task, 1);
+        assert_eq!(config.parallel.max_running, 2);
+    }
+
+    #[test]
+    fn parallel_max_running_must_be_positive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[parallel]\nmax_running = 0\n").expect("write");
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Validation(_))
+        ));
+
+        fs::write(&path, "[parallel]\nmax_running = 3\n").expect("write");
+        let config = Config::load(&path).expect("load");
+        assert_eq!(config.parallel.max_running, 3);
     }
 
     #[test]

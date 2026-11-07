@@ -11,7 +11,7 @@ use loom_store::{append_event, now_ms, read_task, sync_index, Run};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::run_util::{find_run_for_task, git_head};
+use super::run_util::{append_blocked_event, find_run_for_task, git_head};
 use super::Format;
 
 pub fn verify(
@@ -34,6 +34,36 @@ pub fn verify(
     if !workspace.exists() {
         anyhow::bail!("workspace {} no longer exists", workspace.display());
     }
+
+    // Re-run acceptance under the same path locks dispatch used, so an
+    // in-place checkout cannot be written by another task mid-verify.
+    let lease_s = spec.budget.max_wall_s.saturating_add(600);
+    let _locks = match loom_store::LockGuard::acquire(
+        project,
+        task_id,
+        &run.id,
+        &spec.workspace.allowed_paths,
+        lease_s,
+    ) {
+        Ok(guard) => guard,
+        Err(loom_store::LockError::Conflict(conflict)) => {
+            append_blocked_event(
+                project,
+                &run.id,
+                task_id,
+                attempt,
+                vec![
+                    ("code", json!("lock_owner")),
+                    ("lock_owner", json!(conflict.held.owner_task)),
+                    ("lock_run", json!(conflict.held.owner_run)),
+                    ("lock_path", json!(conflict.held.path)),
+                    ("detail", json!(conflict.to_string())),
+                ],
+            )?;
+            anyhow::bail!("verify {task_id} blocked by path lock: {conflict}");
+        }
+        Err(loom_store::LockError::Io(error)) => return Err(error),
+    };
 
     let claim = read_claim(&run);
     let head_sha = git_head(&workspace)

@@ -3,6 +3,7 @@
 mod artifact;
 mod events;
 mod ledger;
+mod locks;
 mod project;
 mod run;
 mod seen;
@@ -12,6 +13,10 @@ mod telemetry;
 pub use artifact::{read_artifact, write_artifact};
 pub use events::{append_event, events_path, read_events};
 pub use ledger::{aggregate_usage, append_usage, ledger_path, read_usage};
+pub use locks::{
+    live_lock_owners, lock_file_name, locks_dir, read_locks, reclaim_stale_locks, release_locks,
+    LockConflict, LockError, LockGuard, PathLock,
+};
 pub use project::{InitReport, Project};
 pub use run::{Run, RunMeta, RUN_META_VERSION};
 pub use seen::Seen;

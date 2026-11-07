@@ -103,6 +103,26 @@ pub fn write_run_meta(
     Ok(run)
 }
 
+/// Append a `task.blocked` event. Used when dispatch/verify refuse to start
+/// instead of silently failing: the block must be visible in the event log.
+pub fn append_blocked_event(
+    project: &Project,
+    run_id: &str,
+    task_id: &str,
+    attempt: u32,
+    data: Vec<(&str, serde_json::Value)>,
+) -> Result<()> {
+    let event = loom_core::Event::new(run_id, now_ms(), loom_core::EventType::TaskBlocked)
+        .task(task_id)
+        .attempt(attempt)
+        .data(
+            data.into_iter()
+                .map(|(key, value)| (key.to_string(), value))
+                .collect::<Vec<_>>(),
+        );
+    loom_store::append_event(project, &event)
+}
+
 pub fn git_head(path: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new("git")
         .arg("-C")

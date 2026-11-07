@@ -98,7 +98,12 @@ impl TaskStatus {
     pub const fn is_open(self) -> bool {
         matches!(
             self,
-            Self::Ready | Self::Dispatched | Self::Running | Self::Receipt | Self::Escalated
+            Self::Ready
+                | Self::Dispatched
+                | Self::Running
+                | Self::Receipt
+                | Self::Blocked
+                | Self::Escalated
         )
     }
 }

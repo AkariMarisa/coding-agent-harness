@@ -3,7 +3,7 @@
 > 面向软件设计、架构与开发的 token 高效 Agent Harness  
 > 核心命题：**长任务，短上下文。**
 
-Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 worktree 中由可替换的 agent 执行，验收只认可执行命令。当前已完成 M1（上下文与账本）、M2 的 native executor 闭环，并开始 M3（确定性路由与成本护栏）；真实外部 adapter / 真实模型 A/B 仍受环境限制。
+Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 worktree 中由可替换的 agent 执行，验收只认可执行命令。当前已完成 M0–M3（协议产品化、上下文与账本、native executor、确定性路由与同层 fallback），M4 并行已落地路径锁与 `[parallel] max_running` 上限；真实外部 adapter / 真实模型 A/B 仍受环境限制。
 
 ## 当前状态
 
@@ -13,7 +13,7 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | 工具输出协议 | v0.1，见 [doc/10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md) |
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
 | 已实现 | `loom init/doctor/status`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom resume` |
-| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、锁与合并队列、并行调度。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
+| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、合并队列与看板（M4 余项）。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
 | 已设计未实现 | 写入抖动（churn）治理、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md) |
 
 ## 快速开始
