@@ -14,6 +14,7 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
 | 已实现 | `loom init/doctor/status`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom resume` |
 | 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、锁与合并队列、并行调度。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
+| 已设计未实现 | 写入抖动（churn）治理、提问/回答协议、skills 治理、初始化本地 CI bootstrap，见 [doc/15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md) |
 
 ## 快速开始
 
@@ -140,6 +141,7 @@ loom route stats                 # 按事件日志统计 worker 占比、升级/
 - 工具协议：[10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md)
 - 多仓库工作区（设计稿）：[13-多仓库工作区与多端协同.md](doc/13-多仓库工作区与多端协同.md)
 - 当前问题与卡点：[14-当前问题与卡点.md](doc/14-当前问题与卡点.md)
+- 运行时治理（设计稿）：[15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md)
 - 文档总览：[doc/README.md](doc/README.md)
 
 ## 许可

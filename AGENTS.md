@@ -138,6 +138,9 @@ make check
 
 当前卡点详见 `doc/14-当前问题与卡点.md`。
 
-**已设计待实现**：多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。
+**已设计待实现**：
+
+- 多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。
+- 运行时治理与工程化（churn 指标与分级干预、`questions.json` + `needs_input`、skills 扫描/按需加载/验证晋升、`loom ci` 本地 CI bootstrap），见 `doc/15-Agent运行时治理与工程化.md`。
 
 **不要提前做**：embedding/向量库、MCP、跨项目知识库、自动规划、并行调度、把成员仓库合并成 monorepo。
