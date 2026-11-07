@@ -29,11 +29,17 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct ParallelConfig {
     pub max_running: usize,
+    /// Worst-case sum of `budget.max_cost_usd` across concurrently running
+    /// tasks plus the new one; 0 disables the cap.
+    pub max_inflight_cost_usd: f64,
 }
 
 impl Default for ParallelConfig {
     fn default() -> Self {
-        Self { max_running: 2 }
+        Self {
+            max_running: 2,
+            max_inflight_cost_usd: 0.0,
+        }
     }
 }
 
@@ -103,6 +109,13 @@ impl Config {
                 "parallel.max_running must be >= 1".to_string(),
             ));
         }
+        if !self.parallel.max_inflight_cost_usd.is_finite()
+            || self.parallel.max_inflight_cost_usd < 0.0
+        {
+            return Err(ConfigError::Validation(
+                "parallel.max_inflight_cost_usd must be finite and >= 0".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -147,6 +160,7 @@ mod tests {
         assert_eq!(config.routing.escalate_after_failures, 2);
         assert_eq!(config.routing.max_escalations_per_task, 1);
         assert_eq!(config.parallel.max_running, 2);
+        assert_eq!(config.parallel.max_inflight_cost_usd, 0.0);
     }
 
     #[test]
@@ -159,9 +173,24 @@ mod tests {
             Err(ConfigError::Validation(_))
         ));
 
-        fs::write(&path, "[parallel]\nmax_running = 3\n").expect("write");
+        fs::write(
+            &path,
+            "[parallel]\nmax_running = 3\nmax_inflight_cost_usd = 1.5\n",
+        )
+        .expect("write");
         let config = Config::load(&path).expect("load");
         assert_eq!(config.parallel.max_running, 3);
+        assert_eq!(config.parallel.max_inflight_cost_usd, 1.5);
+
+        fs::write(
+            &path,
+            "[parallel]\nmax_running = 2\nmax_inflight_cost_usd = -1\n",
+        )
+        .expect("write");
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Validation(_))
+        ));
     }
 
     #[test]

@@ -26,8 +26,12 @@ pub fn append_event(project: &Project, event: &Event) -> Result<()> {
         .append(true)
         .open(&path)
         .with_context(|| format!("open {}", path.display()))?;
-    let line = serde_json::to_string(event)?;
-    writeln!(file, "{line}").with_context(|| "append event")?;
+    let mut line = serde_json::to_string(event)?;
+    line.push('\n');
+    // One syscall per record: concurrent appenders must never interleave the
+    // halves of two JSONL lines (`doc/05` §6, no lost updates).
+    file.write_all(line.as_bytes())
+        .with_context(|| "append event")?;
     Ok(())
 }
 

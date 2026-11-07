@@ -6,24 +6,24 @@ use anyhow::{Context as _, Result};
 use loom_core::compact_utc;
 use loom_store::{now_ms, Project, Run, RunMeta, RUN_META_VERSION};
 
-/// Generate a unique run id based on the current UTC second.
+/// Generate a unique run id based on the current UTC second. The directory is
+/// reserved with an atomic `mkdir`, so two dispatch processes starting in the
+/// same second never end up sharing a run.
 pub fn new_run_id(project: &Project, task_id: &str) -> String {
     let base = format!("R-{}", compact_utc(now_ms()));
     let runs_dir = project.loom_dir().join("runs");
-    if !runs_dir.join(&base).exists() {
-        return base;
-    }
-    let with_task = format!("{base}-{task_id}");
-    if !runs_dir.join(&with_task).exists() {
-        return with_task;
-    }
+    let _ = fs::create_dir_all(&runs_dir);
+
+    let mut candidates = vec![base.clone(), format!("{base}-{task_id}")];
     for suffix in 2..1_000 {
-        let candidate = format!("{base}-{task_id}-{suffix}");
-        if !runs_dir.join(&candidate).exists() {
+        candidates.push(format!("{base}-{task_id}-{suffix}"));
+    }
+    for candidate in candidates {
+        if fs::create_dir(runs_dir.join(&candidate)).is_ok() {
             return candidate;
         }
     }
-    format!("{base}-{task_id}-{}", now_ms())
+    format!("{base}-{task_id}-{}-{}", now_ms(), std::process::id())
 }
 
 /// Resolve which run belongs to a task. Prefers an explicit run id, then the

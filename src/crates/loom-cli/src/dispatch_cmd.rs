@@ -257,11 +257,43 @@ pub(crate) fn dispatch(
             ],
         )?;
         anyhow::bail!(
-            "task {} blocked: {} tasks already running (parallel.max_running = {})",
+            "task {} blocked: {} other task(s) running, over parallel.max_running = {}",
             args.task_id,
-            owners.len(),
+            owners.len().saturating_sub(1),
             config.parallel.max_running
         );
+    }
+
+    // Parallel budget: worst-case cost of everything in flight, including
+    // this task (`doc/05` §6). 0 disables the cap.
+    let inflight_limit = config.parallel.max_inflight_cost_usd;
+    if inflight_limit > 0.0 {
+        let mut inflight = attempt.spec.budget.max_cost_usd;
+        for owner in &owners {
+            if owner == &args.task_id {
+                continue;
+            }
+            if let Ok(other) = loom_store::read_task(project, owner) {
+                inflight += other.budget.max_cost_usd;
+            }
+        }
+        if inflight > inflight_limit {
+            append_blocked_event(
+                project,
+                &attempt.run.id,
+                &args.task_id,
+                args.attempt,
+                vec![
+                    ("code", json!("inflight_budget")),
+                    ("inflight_cost_usd", json!(inflight)),
+                    ("max_inflight_cost_usd", json!(inflight_limit)),
+                ],
+            )?;
+            anyhow::bail!(
+                "task {} blocked: inflight worst-case ${inflight:.4} exceeds parallel.max_inflight_cost_usd ${inflight_limit:.4}",
+                args.task_id
+            );
+        }
     }
     let _locks = locks;
 

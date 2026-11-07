@@ -74,8 +74,33 @@ loom event list --task T-20261106-001 | grep -q "parallel_cap" || {
 }
 rm -f "$cap_a" "$cap_b"
 
+# Inflight budget: a tiny parallel.max_inflight_cost_usd blocks dispatch with
+# task.blocked(code=inflight_budget); `loom init --force` restores defaults.
+cat > /work/.smoke/.loom/config.toml <<'EOF'
+[parallel]
+max_running = 2
+max_inflight_cost_usd = 0.0001
+EOF
+if loom dispatch T-20261106-001 --adapter mock --in-place; then
+    echo "expected parallel.max_inflight_cost_usd to block dispatch" >&2
+    exit 1
+fi
+loom event list --task T-20261106-001 | grep -q "inflight_budget" || {
+    echo "expected task.blocked(code=inflight_budget)" >&2
+    exit 1
+}
+loom init --force > /dev/null
+
 loom dispatch T-20261106-001 --adapter mock --in-place
 loom verify T-20261106-001
+
+# Merge queue: an in-place task is already on the base branch, so merge must
+# reject it instead of rewriting history.
+if loom merge T-20261106-001 --format pretty; then
+    echo "expected in-place merge to be rejected" >&2
+    exit 1
+fi
+
 loom route stats
 loom status
 loom event list --limit 20
@@ -128,6 +153,11 @@ EOF
 
 loom task add --file /work/.smoke/task-fallback.json
 loom route T-20261106-003
+# Merge only accepts a passed task: a pending one must be rejected.
+if loom merge T-20261106-003 --format pretty; then
+    echo "expected merge of a pending task to be rejected" >&2
+    exit 1
+fi
 export LOOM_MOCK_FAIL_ALIAS=worker
 loom dispatch T-20261106-003 --adapter mock --in-place
 unset LOOM_MOCK_FAIL_ALIAS

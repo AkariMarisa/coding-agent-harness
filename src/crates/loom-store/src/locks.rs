@@ -186,12 +186,15 @@ fn remove_lock_file(project: &Project, path: &str) -> Result<()> {
 }
 
 /// RAII holder: locks are released when the guard drops, including on error
-/// paths, so a failed dispatch does not keep its write set locked.
+/// paths, so a failed dispatch does not keep its write set locked. A guard
+/// only removes the paths it wrote itself, so nested guards (merge queue +
+/// verify) cannot release each other's locks.
 #[derive(Debug)]
 pub struct LockGuard {
     project: Project,
     owner_task: String,
     owner_run: String,
+    paths: Vec<String>,
 }
 
 impl LockGuard {
@@ -243,6 +246,7 @@ impl LockGuard {
         }
 
         // Phase 2: write our locks atomically (temp + rename).
+        let mut written = Vec::new();
         for pattern in &patterns {
             let file = lock_file(project, pattern);
             if let Ok(text) = fs::read_to_string(&file) {
@@ -253,7 +257,7 @@ impl LockGuard {
                             lease_expired: other.is_expired(now),
                             held: other,
                         }));
-                        let _ = release_locks(project, owner_task, owner_run);
+                        let _ = release_paths(project, owner_task, owner_run, &written);
                         return Err(conflict);
                     }
                 }
@@ -276,30 +280,49 @@ impl LockGuard {
             fs::rename(&tmp, &file).map_err(|error| {
                 LockError::Io(anyhow!(error).context(format!("rename {}", file.display())))
             })?;
+            written.push((*pattern).to_string());
         }
 
         Ok(Self {
             project: project.clone(),
             owner_task: owner_task.to_string(),
             owner_run: owner_run.to_string(),
+            paths: written,
         })
     }
 }
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        let _ = release_locks(&self.project, &self.owner_task, &self.owner_run);
+        let _ = release_paths(
+            &self.project,
+            &self.owner_task,
+            &self.owner_run,
+            &self.paths,
+        );
     }
 }
 
-/// Release the locks held by one (task, run) pair. Matching on both fields
-/// lets a newer holder of the same task (e.g. `loom verify` after dispatch)
-/// keep its locks when an older guard drops.
-pub fn release_locks(project: &Project, owner_task: &str, owner_run: &str) -> Result<usize> {
+/// Release specific lock paths held by one (task, run) pair. Matching on both
+/// fields lets a newer holder of the same task (e.g. `loom verify` after
+/// dispatch) keep its locks when an older guard drops.
+fn release_paths(
+    project: &Project,
+    owner_task: &str,
+    owner_run: &str,
+    paths: &[String],
+) -> Result<usize> {
     let mut released = 0;
-    for lock in read_locks(project)? {
+    for path in paths {
+        let file = lock_file(project, path);
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        let Ok(lock) = serde_json::from_str::<PathLock>(&text) else {
+            continue;
+        };
         if lock.owner_task == owner_task && lock.owner_run == owner_run {
-            remove_lock_file(project, &lock.path)?;
+            remove_lock_file(project, path)?;
             released += 1;
         }
     }

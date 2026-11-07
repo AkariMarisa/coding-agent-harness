@@ -43,8 +43,10 @@ pub fn append_tool_event(run: &Run, event: &ToolEvent) -> Result<()> {
         .append(true)
         .open(run.telemetry_path())
         .with_context(|| "open tools.jsonl")?;
-    let line = serde_json::to_string(event)?;
-    writeln!(file, "{line}").with_context(|| "append telemetry")?;
+    let mut line = serde_json::to_string(event)?;
+    line.push('\n');
+    file.write_all(line.as_bytes())
+        .with_context(|| "append telemetry")?;
     Ok(())
 }
 

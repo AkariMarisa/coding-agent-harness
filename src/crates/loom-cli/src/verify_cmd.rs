@@ -14,6 +14,17 @@ use sha2::{Digest, Sha256};
 use super::run_util::{append_blocked_event, find_run_for_task, git_head};
 use super::Format;
 
+/// Result of one verify run, for callers (e.g. `loom merge`) that need the
+/// outcome without a second JSON document on stdout.
+pub(crate) struct VerifyOutcome {
+    pub(crate) run_id: String,
+    pub(crate) receipt_path: PathBuf,
+    pub(crate) receipt: Receipt,
+    pub(crate) passed: bool,
+    pub(crate) claim_done: bool,
+    pub(crate) attempt: u32,
+}
+
 pub fn verify(
     project: &loom_store::Project,
     task_id: &str,
@@ -21,6 +32,74 @@ pub fn verify(
     run_id: Option<&str>,
     format: Format,
 ) -> Result<i32> {
+    let outcome = run_verify(project, task_id, attempt, run_id)?;
+    let passed = outcome.passed;
+    print_outcome(task_id, outcome, format)?;
+    Ok(if passed { 0 } else { 1 })
+}
+
+fn print_outcome(task_id: &str, outcome: VerifyOutcome, format: Format) -> Result<()> {
+    let VerifyOutcome {
+        run_id,
+        receipt_path,
+        receipt,
+        passed,
+        claim_done,
+        attempt,
+    } = outcome;
+    match format {
+        Format::Json => {
+            let payload = json!({
+                "run_id": run_id,
+                "task_id": task_id,
+                "attempt": attempt,
+                "passed": passed,
+                "status": receipt.status.as_str(),
+                "claim_done": claim_done,
+                "verify": receipt.verify,
+                "receipt": receipt_path.to_string_lossy(),
+                "tokens": {
+                    "input": receipt.tokens.input,
+                    "cached_input": receipt.tokens.cached_input,
+                    "output": receipt.tokens.output,
+                    "cost_usd": receipt.tokens.cost_usd,
+                },
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        Format::Pretty => {
+            println!("{task_id} attempt {attempt} in run {run_id}");
+            for item in &receipt.verify {
+                println!(
+                    "  [{}] {:<10} exit={} {:.1}s",
+                    if item.result == VerifyResult::Pass {
+                        "ok"
+                    } else {
+                        "FAIL"
+                    },
+                    item.id,
+                    item.exit,
+                    item.duration_s
+                );
+            }
+            println!(
+                "result:   {} ({})",
+                if passed { "passed" } else { "failed" },
+                receipt.status.as_str()
+            );
+            println!("receipt:  {}", receipt_path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Re-run acceptance independently and persist the receipt plus events.
+pub(crate) fn run_verify(
+    project: &loom_store::Project,
+    task_id: &str,
+    attempt: u32,
+    run_id: Option<&str>,
+) -> Result<VerifyOutcome> {
     let spec = read_task(project, task_id)?;
     let run_id = find_run_for_task(project, task_id, run_id)?;
     let run = Run::open(project.clone(), Some(&run_id))?;
@@ -269,51 +348,15 @@ pub fn verify(
     }
     sync_index(project)?;
 
-    match format {
-        Format::Json => {
-            let payload = json!({
-                "run_id": run.id,
-                "task_id": task_id,
-                "attempt": attempt,
-                "passed": passed,
-                "status": receipt.status.as_str(),
-                "claim_done": claim_done,
-                "verify": receipt.verify,
-                "receipt": run.receipt_path().to_string_lossy(),
-                "tokens": {
-                    "input": receipt.tokens.input,
-                    "cached_input": receipt.tokens.cached_input,
-                    "output": receipt.tokens.output,
-                    "cost_usd": receipt.tokens.cost_usd,
-                },
-            });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-        }
-        Format::Pretty => {
-            println!("{} attempt {} in run {}", task_id, attempt, run.id);
-            for item in &receipt.verify {
-                println!(
-                    "  [{}] {:<10} exit={} {:.1}s",
-                    if item.result == VerifyResult::Pass {
-                        "ok"
-                    } else {
-                        "FAIL"
-                    },
-                    item.id,
-                    item.exit,
-                    item.duration_s
-                );
-            }
-            println!(
-                "result:   {} ({})",
-                if passed { "passed" } else { "failed" },
-                receipt.status.as_str()
-            );
-            println!("receipt:  {}", run.receipt_path().display());
-        }
-    }
-
-    Ok(if passed { 0 } else { 1 })
+    let receipt_path = run.receipt_path();
+    Ok(VerifyOutcome {
+        run_id: run.id,
+        receipt_path,
+        receipt,
+        passed,
+        claim_done,
+        attempt,
+    })
 }
 
 fn read_claim(run: &Run) -> Option<Receipt> {
@@ -363,15 +406,15 @@ fn write_patch(run: &Run, workspace: &Path) -> Result<Option<loom_core::Artifact
     }))
 }
 
-struct CommandOutcome {
-    exit_code: i32,
-    timed_out: bool,
-    duration: Duration,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+pub(crate) struct CommandOutcome {
+    pub(crate) exit_code: i32,
+    pub(crate) timed_out: bool,
+    pub(crate) duration: Duration,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 
-fn run_command(cwd: &Path, cmd: &str, timeout_s: u64) -> Result<CommandOutcome> {
+pub(crate) fn run_command(cwd: &Path, cmd: &str, timeout_s: u64) -> Result<CommandOutcome> {
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(cmd)

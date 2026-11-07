@@ -164,7 +164,7 @@ pub fn write_index(project: &Project, index: &TaskIndex) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| "create .loom dir")?;
     }
-    let temp = path.with_extension("json.tmp");
+    let temp = path.with_extension(format!("json.tmp-{}", std::process::id()));
     let text = serde_json::to_string_pretty(index)?;
     fs::write(&temp, format!("{text}\n")).with_context(|| format!("write {}", temp.display()))?;
     fs::rename(&temp, &path).with_context(|| format!("replace {}", path.display()))?;

@@ -19,9 +19,11 @@ use loom_tools::{
 };
 
 mod adapter_cmd;
+mod board_cmd;
 mod context_cmd;
 mod dispatch_cmd;
 mod event_cmd;
+mod merge_cmd;
 mod prompt_cmd;
 mod resume_cmd;
 mod route_cmd;
@@ -71,6 +73,8 @@ enum Command {
     Doctor,
     /// Show project and run summary.
     Status,
+    /// Show tasks grouped by status, plus running/lock counts.
+    Board,
     /// Budgeted tool wrappers.
     Tool {
         #[command(subcommand)]
@@ -140,6 +144,13 @@ enum Command {
     Verify {
         task_id: String,
         /// Attempt number for the receipt.
+        #[arg(long, default_value_t = 1)]
+        attempt: u32,
+    },
+    /// Merge a passed task branch into the base branch (serial merge queue).
+    Merge {
+        task_id: String,
+        /// Attempt number recorded in the verify and merge events.
         #[arg(long, default_value_t = 1)]
         attempt: u32,
     },
@@ -436,6 +447,7 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Doctor => doctor(&project),
         Command::Status => status(&project),
+        Command::Board => board_cmd::board(&project, cli.format),
         Command::Capability { command } => capability(&project, command, cli.format),
         Command::Route {
             command,
@@ -485,6 +497,9 @@ fn run(cli: Cli) -> Result<i32> {
         ),
         Command::Verify { task_id, attempt } => {
             verify_cmd::verify(&project, &task_id, attempt, cli.run.as_deref(), cli.format)
+        }
+        Command::Merge { task_id, attempt } => {
+            merge_cmd::merge(&project, &task_id, attempt, cli.format)
         }
         Command::Resume { dispatch, adapter } => {
             resume_cmd::resume(&project, dispatch, &adapter, cli.run.as_deref(), cli.format)

@@ -36,11 +36,13 @@ impl Seen {
             .append(true)
             .open(&self.path)
             .with_context(|| "open seen.jsonl")?;
-        let line = serde_json::to_string(&Entry {
+        let mut line = serde_json::to_string(&Entry {
             k: key.to_string(),
             artifact_ref: artifact_ref.to_string(),
         })?;
-        writeln!(file, "{line}").with_context(|| "append seen.jsonl")?;
+        line.push('\n');
+        file.write_all(line.as_bytes())
+            .with_context(|| "append seen.jsonl")?;
         Ok(())
     }
 

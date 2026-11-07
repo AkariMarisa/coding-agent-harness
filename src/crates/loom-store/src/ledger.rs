@@ -28,8 +28,11 @@ pub fn append_usage(project: &Project, record: &UsageRecord) -> Result<()> {
         .append(true)
         .open(&path)
         .with_context(|| format!("open {}", path.display()))?;
-    let line = serde_json::to_string(record)?;
-    writeln!(file, "{line}").with_context(|| "append usage record")?;
+    let mut line = serde_json::to_string(record)?;
+    line.push('\n');
+    // Single write so two dispatch processes cannot interleave a record.
+    file.write_all(line.as_bytes())
+        .with_context(|| "append usage record")?;
     Ok(())
 }
 
