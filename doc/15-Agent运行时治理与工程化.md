@@ -12,7 +12,7 @@
 
 | 问题 | 本质 | 控制面要补的东西 |
 |---|---|---|
-| 反复删除重写 | 模型把“重写”当成进展，harness 无法识别无效劳动 | 写入历史、churn 指标、分级干预、跨 run 证据 |
+| 反复删除重写 | 重写本身不贵；贵在全文进入历史后每一步重发，且模型用整文件输出代替 patch | 步骤级上下文重编译、patch-first、token 归因、成本感知止损 |
 | 提问即暂停 | 提问被当成失败或交互等待，而不是一次可恢复的返回 | `questions.json` + `needs_input` 状态 + 回答/假设协议 |
 | skills 泛滥 | skill 是上下文成本与供应链风险，不是“装了就有用” | 仓库画像、离线目录、按需加载、验证后晋升 |
 | 初始化缺 CI | agent 没有可信的本地反馈回路，验收靠人手写 | 技术栈探测、`ci.toml`、`loom ci`、baseline 预检 |
@@ -23,7 +23,7 @@
 
 1. **本地 CI bootstrap**：先让“验证”可信，后面三个方向才有度量基础。
 2. **question protocol**：当前 `needs_input` 会被 verify 记成 `task.failed`，属于正确性缺陷，应优先修。
-3. **churn guard**：native 工具层可立即做；外部 adapter 只能做粗粒度 watchdog。
+3. **churn 治理**：先做 native 的步骤级上下文重编译 + patch-first + token 归因；拦截写入只是最后一道闸。外部 adapter 只能做粗粒度 watchdog 和选型。
 4. **skills 治理**：扫描/加载/静态检查可以先做；**晋升评估依赖真实模型与固定任务集**，当前仍受 [14](14-当前问题与卡点.md) 的环境卡点限制。
 
 明确不做：全局安装 skill、联网自动装 skill、embedding/向量检索、交互式等待、为每个问题调用一次 LLM、v1 嵌套容器。
@@ -32,188 +32,146 @@
 
 ## 1. 问题一：反复删除重写（write churn）
 
-### 1.1 现象
+### 1.1 先算 token 账
 
-DeepSeek v4.1 flash 在修改代码时出现“删除整段、重新填写”的反复行为。根因尚未定位，可能是：
+churn 的浪费不在磁盘，而在**请求历史**。一次“删除后重写”通常同时发生三笔费用：
 
-- 模型对 `edit` 的上下文匹配不自信，倾向整文件重写；
-- 指令里“修好它”与“最小 diff”冲突，模型选择推倒重来；
-- 上下文里缺少当前文件的权威版本，模型凭记忆重建；
-- 失败回灌后没有“不要重复同一改动”的硬约束；
-- 模型本身在长文件上更容易抖动。
+| 费用 | 来源 | 说明 |
+|---|---|---|
+| 输出 token | 模型重新生成整个文件内容，放进 `tool_calls.arguments` | 8KB 文件约 2k tokens/次 |
+| 输入 token 复利 | assistant 消息里带着完整内容，native 每步把 `messages` 全量重发 | 旧版本会在后续**每一步**继续计费 |
+| 额外步数 / 重试 | churn 拉长 run；acceptance 失败回灌；严重时整 run 重开 | 每一步又重发一遍历史 |
 
-在没有度量前，不应先把原因归给某个模型。**先让 harness 能识别并计费这类行为，再谈干预和模型差异。**
+一个直观例子：同一个 8KB 文件重写 5 次，假设每次之后还剩 20、16、12、8、4 步：
 
-### 1.2 现状盲区（代码核对）
+| 项目 | 无治理 | 有步骤级投影 + patch |
+|---|---:|---:|
+| 生成 5 次全文 | 约 10k output tokens | 约 0.5k（每次只发 patch） |
+| 旧版本在后续请求中被重发 | 约 2k × (20+16+12+8+4) ≈ **120k input tokens** | 旧版本被投影掉，只保留当前文件快照，约 2k/步 |
+| 第 3 次重写被硬拦 | 省约 2k output，但前两次的全文仍在历史里继续计费 | 先投影历史，再决定是否拦 |
+
+结论：**阻止第 N 次文件写入，只省一次输出；真正的大头是让旧内容不再进入后续请求。** 所以第一优先级是“步骤级上下文重编译 + patch-first”，不是拦截文件操作。硬拦只适合作为最后一道闸，而且可能诱发模型换一种写法重试，反而增加 token。
+
+### 1.2 现状（为什么现在会复利）
 
 | 现状 | 后果 |
 |---|---|
-| native 的 no-progress 只看 `mutated: bool` | `write` 即使写回完全相同的内容也返回 `mutated: true`，重写永远算“有进展” |
-| `write` 不要求先 `read`，也不限制整文件覆盖 | 模型可以直接重写已存在的大文件 |
-| 没有按文件记录内容哈希/版本 | 无法识别 A→B→A 振荡、无操作写入、重复整文件覆盖 |
-| telemetry 只记工具结果大小，不记“改了哪个文件、改了多少” | 离线无法回答“哪个模型更容易抖” |
-| 外部 adapter 只能看最终 diff | run 结束后才知道 churn，无法中途止损 |
+| native 的 `messages` 只增不减，每步 `provider.complete(messages.clone())` | 历史越长，每一步的 input 越贵；重写越多，复利越重 |
+| assistant 的 `tool_calls.arguments` 里保存完整文件内容 | 每次 `write` 的全文都会留在历史里，后续每一步重发 |
+| `write` 不要求先 `read`，也不限制整文件覆盖 | 模型可以随时用全文重写替代 patch |
+| `edit` 匹配失败时只返回错误 | 模型容易放弃 edit，转成整文件重写 |
+| 只有 run 级 usage，没有 step 级归因 | 无法回答“这次重写多花了多少 token” |
+| no-progress 只看 `mutated` | 重写也算“有进展”，不会触发任何收敛 |
 
-相关实现：`src/crates/loom-native/src/run.rs`（`mutated` / `idle`）、`src/crates/loom-native/src/tools.rs`（`write` / `edit`）、`src/crates/loom-store/src/telemetry.rs`。
+相关实现：`src/crates/loom-native/src/run.rs`（`messages.push` / `provider.complete`）、`src/crates/loom-native/src/tools.rs`（`write` / `edit`）、`src/crates/loom-store/src/telemetry.rs`。
 
-### 1.3 指标定义
+### 1.3 节省 token 的四个杠杆（按 ROI 排序）
 
-以**单次 run** 为窗口，按文件记录版本历史。所有指标必须能从工具调用或 worktree 快照重算。
+#### A. 步骤级上下文重编译（最大杠杆）
 
-| 指标 | 定义 | 用途 |
-|---|---|---|
-| `touches` | 该文件被 `edit` / `write` / `bash` 改动影响的总次数 | 粗粒度活跃度 |
-| `write_passes` | 对**已存在文件**执行的整文件 `write` 次数（内容长度 ≥ 当前文件 50% 且 ≥ 512B） | 识别“推倒重来” |
-| `bytes_written` | 所有 `write` 的 content 字节 + `edit` 插入的字节 | 写入放大分子 |
-| `write_amplification` | `bytes_written / max(1, final_bytes)` | 最终 8KB 的文件写了 120KB → 15× |
-| `oscillations` | 内容哈希序列中出现 A→B→A（至少隔一个不同版本） | 来回改 |
-| `noop_writes` | 写入后哈希不变 | 纯浪费 |
-| `history_lines` | 所有工具调用累计插入 + 删除的行数 | 历史总改动 |
-| `final_diff_lines` | 结束时相对 base 的 `insertions + deletions` | 净改动 |
-| `churn_ratio` | `history_lines / max(1, final_diff_lines)` | 最终只改 10 行却动了 300 行 → 30× |
-| `stalled_rewrites` | 连续 N 次重写之间，acceptance/verify 没有从 fail 变 pass | 区分“重构”与“打转” |
-
-> `touches` 里的 `bash` 只能通过快照归属到文件；native 的 `edit`/`write` 可以精确归属。无法归属时记到 `unknown`，不要猜。
-
-### 1.4 落盘格式
-
-每次 run 结束写 `logs/churn.json`（或 `outbox/churn.json`，二选一，建议 `logs/`）：
-
-```json
-{
-  "v": 1,
-  "run_id": "R-20261107-001",
-  "task_id": "T-20261107-002",
-  "source": "native",
-  "files": [
-    {
-      "path": "src/parser.rs",
-      "touches": 7,
-      "write_passes": 3,
-      "bytes_written": 122880,
-      "final_bytes": 8192,
-      "write_amplification": 15.0,
-      "oscillations": 1,
-      "noop_writes": 2,
-      "history_lines": 312,
-      "final_diff_lines": 11,
-      "churn_ratio": 28.4,
-      "stalled_rewrites": 3
-    }
-  ],
-  "totals": {
-    "files_touched": 1,
-    "bytes_written": 122880,
-    "final_bytes": 8192,
-    "write_amplification": 15.0,
-    "churn_ratio": 28.4
-  },
-  "interventions": [
-    {"step": 9, "level": "nudge", "path": "src/parser.rs"},
-    {"step": 13, "level": "block", "path": "src/parser.rs"}
-  ],
-  "verdict": "warn"
-}
-```
-
-只有发生干预时才写事件，避免每个 run 都污染 `events.jsonl`。建议 `task.churn`：
-
-```json
-{
-  "type": "task.churn",
-  "data": {
-    "level": "nudge|block|stop",
-    "path": "src/parser.rs",
-    "write_passes": 3,
-    "churn_ratio": 28.4,
-    "action": "continue|blocked"
-  }
-}
-```
-
-新增事件类型时，按 `AGENTS.md` §4 同步：`loom-core` 枚举、`schemas/event.v1.json`、`doc/03` §11.2、至少一个测试。
-
-### 1.5 分级干预
-
-原则：**先提醒、再阻断、最后停 run**；默认不把“抖动”直接算成模型能力失败。
-
-| 级别 | 触发（默认值） | 动作 | 结果 |
-|---|---|---|---|
-| L0 观察 | 总是 | 记录 `churn.json`，不影响执行 | 继续 |
-| L1 提醒 | 同文件第 2 次整文件重写，且 verify 无改善 | 注入一条工具/用户消息：列出当前文件哈希、已重写次数、要求先 `read`、用 `edit` 做最小改动、若卡住就 `finish(blocked)` | 继续，成本几乎为零 |
-| L2 阻断 | 第 3 次整文件重写，或 `write_amplification > 10` | `write`/`edit` 返回错误观察：“churn guard 拒绝第 3 次整文件重写；请 read 当前内容后用 edit，或 finish(blocked) 说明卡点” | 工具调用失败，模型可见；不直接杀进程 |
-| L3 停止 | 第 5 次整文件重写，或 `churn_ratio > 8` 且连续 3 次无 verify 改善，或 churn 消耗超过预算 20% | 终止执行，写 `churn.json` + `task.churn`，`finish(blocked, code=churn_guard)` | 退出码 `2`；默认 `blocked`，可配置为 `failed` |
-
-配置建议：
-
-```toml
-[guardrails.churn]
-enabled = true
-max_write_passes = 3
-max_amplification = 10.0
-max_churn_ratio = 8.0
-max_stalled_rewrites = 3
-on_exceeded = "blocked"   # blocked | failed
-allow = ["**/generated/**", "**/*.lock", "**/dist/**"]
-```
-
-- `on_exceeded = "blocked"`：不计数到升级阈值，交给人判断；适合“不确定是模型问题还是任务本身需要大改”。
-- `on_exceeded = "failed"`：计入 `task.failed`，可触发 M3 升级；适合明确要求“最小 diff”的任务。
-- 这是策略选择，不在代码里写死。
-
-### 1.6 前置约束（比事后检测更便宜）
-
-在 native 工具层增加两条低成本规则：
-
-1. **大文件先读后写**：对已存在且 > 40 行的文件，第一次 `write` 前必须在本 run 内 `read` 过它；否则返回错误观察，提示先读。
-2. **整文件覆盖要显式**：`write` 已存在文件时要求 `mode = "replace"`（或 `overwrite = true`），默认只允许创建新文件/小文件覆盖；`edit` 仍是首选。
-
-这两条不依赖模型自省，直接改变工具的可行动空间。对“确实需要整文件重写”的场景，模型显式声明即可，同时会被计入 `write_passes`。
-
-### 1.7 外部 adapter 的 watchdog
-
-外部 adapter 不能拦截工具调用，只能采样 worktree：
-
-- 每 2s 对 `git ls-files` + 未跟踪文件做哈希快照（排除 `.git`、`.loom`、配置的 allowlist）；
-- 统计同一文件哈希变化次数、净大小变化；
-- 只在**明显 gross loop**时触发 L3：同一文件变化 ≥ 8 次且净 diff 很小，或 run 超过墙钟 50% 但 diff 仍为 0；
-- 触发后先 `SIGTERM`，宽限 5s 再 `SIGKILL`；写 `churn.json`，`source = "watchdog"`，`confidence = "low|medium"`；
-- 不尝试 L1/L2，因为采样看不到工具调用边界，误判成本高。
-
-watchdog 的价值是“止损”，不是“精确计费”。精确 churn 数据仍以 native 为准。
-
-### 1.8 反馈到下一次 attempt
-
-`dispatch` 生成 `FailurePack` 时，若上一 run 有 `churn.json`，只注入**一行摘要 + 前 3 个文件**：
+把 native 从“长会话”改成“每步重新编译有界上下文”，这也符合 [08](08-设计路线-v0.2.md) 原本的 Context Compiler 原则：
 
 ```text
-上一 run 的写入抖动：src/parser.rs 整文件重写 3 次，churn_ratio 28.4。
-本次要求：先 read，使用 edit 做最小 diff；不要重新生成整个文件。
+[稳定前缀] system + task + AC + 当前 skill 索引
+[工作区状态] 本 run 改过的文件：path / sha / 行数 / 有界当前内容或预览
+[进度账本] step / tool / path / result / verify 状态（一到两行一条）
+[最近交互] 最近 1–2 条原始 tool call / result
 ```
 
-不要把完整 `churn.json` 塞进 packet。
+规则：
 
-### 1.9 度量与模型差异
+- 旧的 `write` / `edit` 参数替换成一行引用：`[elided write path=src/x.rs sha=ab12 lines=240]`；
+- 旧的 `read` / `search` 结果替换成 `[elided read path=... range=... sha=... ref=...]`；
+- **当前版本**保留一份有界快照（单文件 ≤ 8KB；更大的文件只留 sha + 关键区间 + “需要时 read”）；
+- 稳定前缀保持不动，优先保住 provider 前缀缓存；只重编译动态尾部；
+- 每步输入预算建议与 worker 一致（24k），超了先裁旧交互与快照，不裁 goal / AC / constraints。
 
-新增 `loom churn stats`（先做 JSON，后做 pretty）：
+这样每步成本从 `O(所有历史)` 变成 `O(稳定前缀 + 当前状态 + 最近交互)`。旧重写不再复利，这是省 token 的主力。
 
-- 按 model / role / task 聚合 `write_amplification`、`churn_ratio`、`stalled_rewrites`、干预次数；
-- 关联 `usage` 账本，估算抖动浪费的 token（按发生重写的 step 的 usage 求和，标记为估算）；
-- 输出“DeepSeek v4.1 flash vs 其他 worker”的对比，而不是预设结论。
+> 代价：重编译会让“动态尾部”的前缀缓存失效；需要在真实 provider 上 A/B，比较“少发的 input”与“失去的缓存折扣”。稳定前缀不变，缓存仍可命中一部分。
 
-这是回答“是否模型问题”的唯一可靠方式；单看几个案例容易过拟合。
+#### B. Patch-first 工具（直接减少 output 与历史体积）
 
-### 1.10 可行性
+- 新增 `patch` 工具（unified diff / 小 hunk），或对已存在文件强制走 `edit`；
+- `write` 只用于新文件、小文件，或显式 `mode = "replace"`；
+- `write` 单次内容设上限（例如 16KB），超过要求 patch 或分块；
+- 提升 `edit` 的匹配鲁棒性（CRLF、首尾空白、上下文锚点），并在失败时返回“请 read 精确区间”，**不要**提示“重写整个文件”；
+- acceptance 失败包加一句：“用 edit/patch 做最小改动；不要重新生成整个文件。”
+
+patch 的收益是双重的：output 变少，进入历史的 payload 也变小。
+
+#### C. Token 感知的止损 / 重启
+
+- 按 step 记录 usage，并把“包含整文件重写的 step”单独归因；
+- 估算继续成本 ≈ `剩余步数 × 当前上下文 token`，重启成本 ≈ `新 run 的稳定前缀 + 已知状态 + 重做步数`；
+- 只有 `继续成本 > 重启成本 + 余量` 时才停；默认最多重启 1 次，避免重启抖动；
+- 重启时用**新编译的短上下文** + 一段 churn 摘要，而不是把旧 run 的完整历史带过去。
+
+这条是“止损”，不是主要节省手段；它解决的是已经进入坏轨迹、继续跑明显更贵的情况。
+
+#### D. Prompt / 路由（降低发生概率）
+
+- prompt 明确：最小 diff、先 read 后 edit、不要凭记忆重建文件；
+- 失败包明确：不要重复同一失败改动，不要整文件重写；
+- `loom churn stats --by model` 产出按模型的 token 浪费，edit 密集型任务避开高 churn 模型，或改用更强 tier；
+- 这些是辅助手段，不能替代 A/B。
+
+### 1.4 指标：token 优先，文件指标只做诊断
+
+`churn.json` 里同时记录两类指标：
+
+| 指标 | 类型 | 定义 |
+|---|---|---|
+| `rewrite_output_tokens` | 实际 | 含整文件重写的 step 的 output tokens；一个 step 多个调用时按 payload 占比分摊，标 `shared` |
+| `history_carry_tokens` | 估算 | 旧 payload 若不被投影，会在后续 N 步被重发的 token 数；投影后实际 carry 接近 0 |
+| `avoided_input_tokens` | 估算 | 步骤级投影实际省下的 input tokens |
+| `retry_tokens` | 实际 | 因 churn 触发的 acceptance 回灌 / 重启额外消耗 |
+| `wasted_tokens_est` | 估算 | `rewrite_output_tokens + history_carry_tokens + retry_tokens` |
+| `wasted_cost_usd_est` | 估算 | 按模型价格表计算；价格未知标 `unknown`，不要猜 |
+| `write_passes` / `churn_ratio` / `oscillations` | 诊断 | 用于解释“为什么贵”，不作为 KPI |
+
+- 估算统一用 `loom-core::text::estimate_tokens`，并在 `churn.json` 标 `estimated: true`；
+- `loom churn stats` 的第一屏是 token / 成本，第二屏才是文件操作指标；
+- 这样才能回答“DeepSeek v4.1 flash 到底多花了多少 token”，而不是只看到“重写了 3 次”。
+
+### 1.5 干预阶梯（重排）
+
+| 级别 | 触发 | 动作 | 省 token 的位置 |
+|---|---|---|---|
+| L0 基线 | 始终 | 步骤级上下文重编译 + 当前文件快照 + patch-first | 防止旧 payload 复利；减少 output |
+| L1 投影 | 同文件第 2 次整文件重写，且 verify 无改善 | 立即投影旧 payload；只保留当前版本；注入一行状态和“用 edit/patch” | 后续每一步都少发旧全文 |
+| L2 约束 | 第 3 次整文件重写 | 拒绝无 `mode=replace` 的整文件 `write`；错误信息很短，要求 patch/edit | 阻止新的全文进入历史 |
+| L3 止损 | churn token 超预算阈值且连续无 verify 改善 | 比较继续/重启成本；必要时停 run，用新编译上下文重启 | 截断剩余的复利 |
+
+明确：**L2 不是主手段**。它的价值是“防止下一次全文进入历史”，而不是“省下这一次写入”。如果 L2 让模型反复重试，应该回退到 L1/L3。
+
+### 1.6 外部 adapter
+
+外部 agent 拥有自己的会话历史，Loom 无法逐步投影。能做的只有：
+
+- 在 adapter prompt / 配置里要求 patch-first、最小 diff、上下文上限（如果 adapter 支持）；
+- watchdog 只在 gross loop 且“继续成本明显 > 重启成本”时终止；外部 agent 重启可能重新读一遍仓库，收益不确定，默认保守；
+- 事后用 `churn.json` 和 `loom churn stats` 做模型/agent 选择；
+- 真正要省 token，优先用支持短上下文/可重编译的 adapter（native 或被包装过的外部 agent）。
+
+### 1.7 可行性
 
 | 部分 | 可行性 | 说明 |
 |---|---|---|
-| native 精确 churn | **高** | 工具层拥有 content 与 path，1–2 天可出指标与 L1/L2 |
-| 外部 adapter watchdog | **中** | 只能粗粒度、低频采样；误判与漏判都存在 |
-| 阈值调参 | **中** | 需要真实任务集；当前只能用脚本化 provider 做回归 |
-| 模型差异结论 | **低（现在）** | 缺真实 key/账单/固定任务集，先积累 telemetry |
-| 误伤重构/格式化 | **中** | 用 allowlist、verify 改善判断、连续无改善才升级来降低 |
+| 步骤级上下文重编译 | **高** | native 自己拥有 messages；2–4 天可出原型；需 A/B 质量与缓存 |
+| patch 工具 / 强制 edit | **高** | 工具层改动明确；2–3 天含测试 |
+| token 归因与 churn.json | **高** | 已有 per-call usage，补 step 维度即可 |
+| 成本感知重启 | **中** | 需要可靠的剩余成本估算；容易重启抖动，默认最多 1 次 |
+| 外部 adapter 省 token | **低–中** | 历史不在 Loom 手里；主要靠 prompt 和选型 |
+| 模型差异结论 | **低（现在）** | 缺真实 key / 账单 / 固定任务集；先积累 token 指标 |
 
-结论：**native 先做，外部 adapter 后做**；指标先于拦截，避免把正常重构误杀。
+### 1.8 验收（未来实现时）
+
+- [ ] 脚本化 provider 对同一 8KB 文件连续重写 5 次；无投影时 input 随步数复利增长，有投影时有界。
+- [ ] `churn.json` 输出 `rewrite_output_tokens`、`history_carry_tokens`、`avoided_input_tokens`、`wasted_tokens_est`，并标 `estimated`。
+- [ ] 第 2 次重写后旧 payload 被投影；第 3 次无 `mode=replace` 的 `write` 被短错误拒绝；L3 触发后重启只带 churn 摘要。
+- [ ] 同一改动用 patch 与用整文件 write 的 output token 有可量化差距。
+- [ ] 投影/重启后 acceptance 仍能通过，且不会无限重启。
 
 ---
 
@@ -736,6 +694,8 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
 - **不改变退出码语义**：`0` 成功、`2` 需要人工/阻塞、`3` 预算/超时、`4` adapter 失败；`churn_guard` / `needs_input` 都是 `2`，用事件 `data.code` 区分。
 - **上下文硬预算不变**：churn 摘要、问题、skill 正文都受 8KB/24KB/128KB 与 Context Compiler 约束。
 - **不依赖真实模型即可测试**：前三项都能用 mock/native 脚本化 provider 覆盖。
+- **churn 的 KPI 是 `wasted_tokens_est` / `wasted_cost_usd_est`，不是写入次数**：`write_passes` / `churn_ratio` 只用于解释原因；L2 拦截不是主要节省手段。
+- **churn 优化的是 `messages` 投影与工具形态**（patch/edit），不改变 provider 的 wire 协议。
 
 ---
 
@@ -745,8 +705,8 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
 |---|---|---|---|---|
 | P0 | CI bootstrap | 让 verify/acceptance 可信；后续度量都靠它 | 无 | 3–5 人日 |
 | P0 | question protocol | 修 `needs_input → task.failed` 的正确性缺陷 | 无 | 3–4 人日 |
-| P1 | churn guard（native） | 直接减少可见浪费；指标可先于拦截 | 无 | 3–5 人日 |
-| P1 | churn watchdog（外部 adapter） | 止损外部 agent 的 gross loop | 容器内需有 adapter 二进制 | 2–3 人日 |
+| P1 | churn：native 步骤级上下文重编译 + patch-first + token 归因 | 先切断旧全文的输入复利，再谈拦截；指标必须先于策略 | 无 | 4–6 人日 |
+| P1 | churn watchdog（外部 adapter） | 只做 gross loop 止损与选型依据 | 容器内需有 adapter 二进制 | 2–3 人日 |
 | P2 | skills：scan + 本地 catalog + lock + 按需加载 | 结构先立起来，避免全局安装 | CI/任务集 | 5–8 人日 |
 | P2 | skills：L2 评估与晋升 | 证明 skill 真的有用 | 真实模型 + 固定任务集 + 账单 | 后置 |
 | P3 | 图案/embedding/联网目录 | 收益未证明 | — | 不做 |
@@ -755,7 +715,7 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
 
 - 当前没有并发/锁，P2 的“父子 agent 不等待”只定义协议，不实现并行调度；M4 再做。
 - 真实 goose/OpenCode canary 仍受二进制与 API key 阻塞，见 [14](14-当前问题与卡点.md)。
-- 不要为了 churn 指标去改 provider 请求格式；它只观察工具与 worktree。
+- churn 优化的是 `messages` 投影与工具形态，不改 provider 请求格式；外部 adapter 只能观察 worktree，不能逐步投影。
 
 ---
 
@@ -798,8 +758,11 @@ loom ci doctor                      # 工具链、版本、缺失命令、baseli
 - [ ] 缺 `cargo`/`pnpm` 时 `loom ci doctor` 给出可行动报错，而不是静默跳过。
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。
 - [ ] 脚本化 provider 调用 `ask` 工具 → `questions.json` → exit 2 → `loom inbox` 可见 → `loom answer` → 新 run 收到答案并通过 verify。
-- [ ] native 对同一文件连续 3 次整文件重写触发 L2，第 5 次触发 L3；`churn.json` 指标可重算。
-- [ ] `loom churn stats --by model` 能输出按模型的 `write_amplification` / `churn_ratio`（先用脚本化数据验证）。
+- [ ] 脚本化 provider 对同一 8KB 文件连续重写 5 次；无投影时 input 随步数复利增长，有投影时有界。
+- [ ] `churn.json` 输出 `rewrite_output_tokens`、`history_carry_tokens`、`avoided_input_tokens`、`wasted_tokens_est`，并标 `estimated`。
+- [ ] 第 2 次重写后旧 payload 被投影；第 3 次无 `mode=replace` 的 `write` 被短错误拒绝；L3 触发后重启只带 churn 摘要。
+- [ ] 同一改动用 patch 与用整文件 `write` 的 output token 有可量化差距。
+- [ ] `loom churn stats --by model` 第一屏输出 token / 成本，第二屏才是 `write_passes` / `churn_ratio`（先用脚本化数据验证）。
 - [ ] `loom skill scan` 输出的每个标签都有证据文件；无证据不出现。
 - [ ] `loom skill add` 只写项目级目录与 `skills.lock`；未通过静态检查的 skill 拒绝安装。
 - [ ] 加载 skill 时只注入索引行；正文经 `loom skill show` 按需读取，受 4KB/8KB 预算。
