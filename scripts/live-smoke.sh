@@ -11,6 +11,11 @@
 set -euo pipefail
 cd /work
 
+# Hard token cap: per-task budget is40k input +12k output (thinking models
+# can burn thousands of output tokens deliberating in a single step — the
+# relay's deepseek-flash once spent3794 on one), and the script fails if the
+# whole run exceeds100k input+output.
+
 ONLY="${LOOM_LIVE_ONLY:-both}"
 
 if [ "$ONLY" = "both" ] || [ "$ONLY" = "deepseek" ]; then
@@ -120,9 +125,9 @@ gen_task() {
     "forbidden_paths": []
   },
   "inputs": [],
-  "constraints": {"max_files_touched": 2, "no_new_dependencies": true, "style": []},
+  "constraints": {"max_files_touched": 4, "no_new_dependencies": true, "style": []},
   "acceptance": [{"id": "A1", "cmd": "test -f $file", "expect_exit": 0, "timeout_s": 30}],
-  "budget": {"max_input_tokens": 40000, "max_output_tokens": 5000, "max_steps": 8, "max_wall_s": 600, "max_cost_usd": 0.25},
+  "budget": {"max_input_tokens": 40000, "max_output_tokens": 12000, "max_steps": 8, "max_wall_s": 600, "max_cost_usd": 0.25},
   "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": ["verify_log"]}
 }
 EOF
