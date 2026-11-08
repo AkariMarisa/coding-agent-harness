@@ -54,6 +54,29 @@ while IFS= read -r name; do
     esac
 done < <(compgen -e)
 
+# Optional same-path mounts for target-project work: mounting at the original
+# absolute path keeps project config (local.properties, build_local.sh) valid.
+# Set them in .env.local; missing paths are skipped.
+for name in LOOM_TARGET_REPO LOOM_ANDROID_SDK LOOM_JAVA_HOME LOOM_GRADLE_HOME; do
+    path="${!name:-}"
+    if [[ -n "$path" && -d "$path" ]]; then
+        ENVS+=(-v "$path:$path:Z" -e "$name")
+        case "$name" in
+            LOOM_JAVA_HOME) ENVS+=(-e "JAVA_HOME=$path") ;;
+            LOOM_ANDROID_SDK)
+                ENVS+=(-e "ANDROID_HOME=$path" -e "ANDROID_SDK_ROOT=$path")
+                ;;
+            LOOM_GRADLE_HOME) ENVS+=(-e "GRADLE_USER_HOME=$path") ;;
+        esac
+    fi
+done
+
+# Maven local cache (Robolectric downloads android-all into ~/.m2 at test
+# time). HOME must point at its parent so `user.home/.m2` resolves there.
+if [[ -n "${LOOM_MAVEN_HOME:-}" && -d "$LOOM_MAVEN_HOME" ]]; then
+    ENVS+=(-v "$LOOM_MAVEN_HOME:$LOOM_MAVEN_HOME:Z" -e "HOME=$(dirname "$LOOM_MAVEN_HOME")")
+fi
+
 exec "$ENGINE" run --rm -i \
     -v "$MOUNT" \
     -w /work/src \

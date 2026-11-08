@@ -243,7 +243,10 @@ impl ToolBox {
     }
 
     fn bash(&self, args: &Value) -> Result<ToolResult> {
-        let cmd = string_arg(args, "cmd")?;
+        // `command` is what models often emit for a shell command even though
+        // the schema says `cmd`; accepting both avoids burning a whole turn
+        // on "missing string argument".
+        let cmd = string_arg(args, "cmd").or_else(|_| string_arg(args, "command"))?;
         let timeout_s = args
             .get("timeout_s")
             .and_then(Value::as_u64)
@@ -330,7 +333,15 @@ impl ToolBox {
     }
 
     fn resolve(&self, path: &str) -> Result<PathBuf> {
-        let relative = normalize(path)?;
+        let path = path.trim();
+        // Models often echo absolute paths from the bash commands they just
+        // saw; accept them when they point inside the workspace, keep
+        // rejecting anything outside it.
+        let root = self.root.to_string_lossy();
+        let relative = match path.strip_prefix(root.as_ref()) {
+            Some(rest) => normalize(rest.trim_start_matches('/'))?,
+            None => normalize(path)?,
+        };
         Ok(self.root.join(relative))
     }
 
@@ -452,6 +463,34 @@ mod tests {
             )
             .expect("search");
         assert!(result.observation.contains("src/a.rs:1"));
+    }
+
+    #[test]
+    fn read_accepts_absolute_path_inside_workspace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tools = toolbox(dir.path());
+        tools
+            .execute("write", r#"{"path":"src/a.txt","content":"hello"}"#)
+            .expect("write");
+        let absolute = dir.path().join("src/a.txt");
+        let result = tools
+            .execute("read", &format!(r#"{{"path":"{}"}}"#, absolute.display()))
+            .expect("abs read");
+        assert!(result.observation.contains("hello"));
+        // Absolute paths outside the workspace stay rejected.
+        assert!(tools
+            .execute("read", r#"{"path":"/etc/hostname"}"#)
+            .is_err());
+    }
+
+    #[test]
+    fn bash_accepts_command_alias() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tools = toolbox(dir.path());
+        let result = tools
+            .execute("bash", r#"{"command": "echo alias-ok"}"#)
+            .expect("run");
+        assert!(result.observation.contains("alias-ok"));
     }
 
     #[test]
