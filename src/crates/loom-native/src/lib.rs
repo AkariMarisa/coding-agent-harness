@@ -17,8 +17,8 @@ pub(crate) fn scrub_child_env(command: &mut std::process::Command) {
 }
 
 pub use provider::{
-    ChatMessage, ChatRequest, ChatResponse, OpenAiProvider, Provider, ScriptedProvider, ToolCall,
-    Usage,
+    build_chat_body, ChatMessage, ChatRequest, ChatResponse, OpenAiProvider, Provider,
+    ScriptedProvider, ToolCall, Usage,
 };
 pub use run::{
     run, run_from_env, NativeConfig, NativeOutcome, NativeRequest, VerifyLine, NATIVE_VERSION,

@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use loom_native::{ChatMessage, ChatRequest, OpenAiProvider, Provider, ToolCall};
+use loom_native::{build_chat_body, ChatMessage, ChatRequest, OpenAiProvider, Provider, ToolCall};
 use serde_json::{json, Value};
 
 const SYSTEM: &str = "You are a probe. Reply with one short word.";
@@ -46,7 +46,16 @@ fn tool_message(call_id: &str, with_name: bool) -> ChatMessage {
         tool_calls: None,
         tool_call_id: Some(call_id.into()),
         name: with_name.then(|| "bash".to_string()),
+        reasoning_content: None,
     }
+}
+
+/// Assistant turn with tool calls plus the thinking echo that official
+/// DeepSeek requires when tool history is replayed.
+fn assistant_calls(calls: Vec<ToolCall>, content: Option<&str>) -> ChatMessage {
+    let mut message = ChatMessage::assistant(content.map(str::to_string), calls);
+    message.reasoning_content = Some("Create the file, then verify it.".to_string());
+    message
 }
 
 fn one_call() -> Vec<ToolCall> {
@@ -134,13 +143,13 @@ fn probes_relay_message_shapes() {
                     requests: &mut u32,
                     failures: &mut Vec<String>|
      -> bool {
-        let body = json!({
-            "model": model,
-            "messages": serde_json::to_value(&messages).expect("messages"),
-            "tools": bash_tool(),
-            "tool_choice": "auto",
-            "max_tokens": MAX_TOKENS,
-            "temperature": 0.0,
+        // Same body the native executor sends, so the probe proves our wire.
+        let body = build_chat_body(&ChatRequest {
+            model: model.to_string(),
+            messages,
+            tools: bash_tool(),
+            max_tokens: MAX_TOKENS,
+            temperature: 0.0,
         });
         *requests += 1;
         let (status, text) = post(&format!("{base}/chat/completions"), &auth, &body);
@@ -193,7 +202,7 @@ fn probes_relay_message_shapes() {
                 std::thread::sleep(Duration::from_secs(1));
             }
             let mut messages = base_messages();
-            messages.push(ChatMessage::assistant(None, one_call()));
+            messages.push(assistant_calls(one_call(), None));
             messages.push(tool_message("call-1", true));
             if chat_raw(
                 &format!("tool_history attempt {attempt}"),
@@ -215,7 +224,7 @@ fn probes_relay_message_shapes() {
         // the decisive question plus the other wires when they fail.
         if index == 0 {
             let mut no_name = base_messages();
-            no_name.push(ChatMessage::assistant(None, one_call()));
+            no_name.push(assistant_calls(one_call(), None));
             no_name.push(tool_message("call-1", false));
             chat_raw(
                 "chat_tool_history_no_name",
@@ -226,10 +235,7 @@ fn probes_relay_message_shapes() {
             );
 
             let mut with_content = base_messages();
-            with_content.push(ChatMessage::assistant(
-                Some("running".to_string()),
-                one_call(),
-            ));
+            with_content.push(assistant_calls(one_call(), Some("running")));
             with_content.push(tool_message("call-1", true));
             chat_raw(
                 "chat_assistant_content_tool",
@@ -240,7 +246,7 @@ fn probes_relay_message_shapes() {
             );
 
             let mut parallel = base_messages();
-            parallel.push(ChatMessage::assistant(None, two_calls()));
+            parallel.push(assistant_calls(two_calls(), None));
             parallel.push(tool_message("call-1", true));
             parallel.push(tool_message("call-2", true));
             chat_raw(

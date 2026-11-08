@@ -122,7 +122,7 @@ gen_task() {
   "inputs": [],
   "constraints": {"max_files_touched": 2, "no_new_dependencies": true, "style": []},
   "acceptance": [{"id": "A1", "cmd": "test -f $file", "expect_exit": 0, "timeout_s": 30}],
-  "budget": {"max_input_tokens": 40000, "max_output_tokens": 5000, "max_steps": 8, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "budget": {"max_input_tokens": 40000, "max_output_tokens": 5000, "max_steps": 8, "max_wall_s": 600, "max_cost_usd": 0.25},
   "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": ["verify_log"]}
 }
 EOF

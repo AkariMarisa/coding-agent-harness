@@ -31,6 +31,11 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Thinking echo (DeepSeek-style): when a provider returns
+    /// `reasoning_content`, official endpoints reject tool history that does
+    /// not pass it back, so we carry it verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 impl ChatMessage {
@@ -41,6 +46,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
         }
     }
 
@@ -51,6 +57,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
         }
     }
 
@@ -61,6 +68,7 @@ impl ChatMessage {
             tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
         }
     }
 
@@ -75,6 +83,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: Some(call_id.into()),
             name: Some(name.into()),
+            reasoning_content: None,
         }
     }
 }
@@ -298,15 +307,60 @@ impl Provider for OpenAiProvider {
     }
 }
 
-fn build_chat_body(request: &ChatRequest) -> Value {
+/// Build the chat-wire request body. Public so the relay probe sends exactly
+/// the bytes the native executor would.
+pub fn build_chat_body(request: &ChatRequest) -> Value {
     json!({
         "model": request.model,
-        "messages": request.messages,
+        "messages": request
+            .messages
+            .iter()
+            .map(chat_message_json)
+            .collect::<Vec<Value>>(),
         "tools": request.tools,
         "tool_choice": "auto",
         "max_tokens": request.max_tokens,
         "temperature": request.temperature,
     })
+}
+
+/// Chat-wire message shape. `ChatMessage` is wire-neutral, so tool calls are
+/// serialized explicitly: the OpenAI format nests them as
+/// `{id, type: "function", function: {name, arguments}}`. Sending the flat
+/// internal shape is what official endpoints reject with
+/// `messages[N]: missing field 'type'`.
+fn chat_message_json(message: &ChatMessage) -> Value {
+    match message.role.as_str() {
+        "assistant" => {
+            let mut out = json!({ "role": "assistant" });
+            out["content"] = match &message.content {
+                Some(text) => json!(text),
+                None => Value::Null,
+            };
+            if let Some(reasoning) = &message.reasoning_content {
+                out["reasoning_content"] = json!(reasoning);
+            }
+            if let Some(calls) = &message.tool_calls {
+                out["tool_calls"] = Value::Array(
+                    calls
+                        .iter()
+                        .map(|call| {
+                            json!({
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.name,
+                                    "arguments": call.arguments,
+                                },
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            out
+        }
+        _ => json!(message),
+    }
 }
 
 /// Anthropic Messages body from our wire-neutral history.
@@ -560,9 +614,16 @@ fn parse_response(value: &Value) -> Result<ChatResponse> {
     }
 
     let usage = value.get("usage").map(parse_usage).unwrap_or_default();
+    let mut chat_message = ChatMessage::assistant(content, tool_calls);
+    // Keep the thinking echo: official DeepSeek rejects tool history that
+    // drops `reasoning_content` ("must be passed back to the API").
+    chat_message.reasoning_content = message
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
 
     Ok(ChatResponse {
-        message: ChatMessage::assistant(content, tool_calls),
+        message: chat_message,
         usage,
     })
 }
@@ -709,6 +770,7 @@ mod tests {
             "choices": [{
                 "message": {
                     "content": null,
+                    "reasoning_content": "because",
                     "tool_calls": [{
                         "id": "call_1",
                         "type": "function",
@@ -729,6 +791,11 @@ mod tests {
         assert_eq!(
             response.message.tool_calls.as_ref().unwrap()[0].name,
             "read"
+        );
+        assert_eq!(
+            response.message.reasoning_content.as_deref(),
+            Some("because"),
+            "the thinking echo must survive parsing so it can be sent back"
         );
     }
 
@@ -805,6 +872,39 @@ mod tests {
         let results = messages[2]["content"].as_array().expect("results");
         assert_eq!(results.len(), 2, "parallel results batch into one message");
         assert_eq!(results[1]["tool_use_id"], json!("call-2"));
+    }
+
+    #[test]
+    fn chat_body_nests_tool_calls_in_openai_format() {
+        let mut assistant =
+            ChatMessage::assistant(Some("running".to_string()), vec![call("call-1")]);
+        assistant.reasoning_content = Some("because".to_string());
+        let request = sample_request(vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("go"),
+            assistant,
+            ChatMessage::tool("call-1", "bash", "exit=0"),
+        ]);
+        let body = build_chat_body(&request);
+        let messages = body["messages"].as_array().expect("messages");
+        let tool_call = &messages[2]["tool_calls"][0];
+        assert_eq!(tool_call["type"], json!("function"));
+        assert_eq!(tool_call["function"]["name"], json!("bash"));
+        assert!(
+            tool_call["function"]["arguments"].is_string(),
+            "arguments stay a raw JSON string on the wire"
+        );
+        assert!(
+            tool_call.get("name").is_none() && tool_call.get("arguments").is_none(),
+            "flat internal fields must not leak onto the wire"
+        );
+        assert_eq!(
+            messages[2]["reasoning_content"],
+            json!("because"),
+            "the thinking echo must be sent back verbatim"
+        );
+        assert_eq!(messages[3]["role"], json!("tool"));
+        assert_eq!(messages[3]["tool_call_id"], json!("call-1"));
     }
 
     #[test]
