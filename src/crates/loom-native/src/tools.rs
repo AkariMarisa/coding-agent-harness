@@ -258,17 +258,16 @@ impl ToolBox {
         let stdout = fs::File::create(&artifact).with_context(|| "create bash log")?;
         let stderr = stdout.try_clone().with_context(|| "clone bash log")?;
 
-        let mut child = Command::new("sh")
+        let mut child = Command::new("sh");
+        child
             .arg("-c")
             .arg(&cmd)
             .current_dir(&self.root)
-            .env_remove("LOOM_API_KEY")
-            .env_remove("OPENAI_API_KEY")
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
-            .stdin(Stdio::null())
-            .spawn()
-            .with_context(|| "spawn bash")?;
+            .stdin(Stdio::null());
+        crate::scrub_child_env(&mut child);
+        let mut child = child.spawn().with_context(|| "spawn bash")?;
 
         let started = Instant::now();
         let mut timed_out = false;

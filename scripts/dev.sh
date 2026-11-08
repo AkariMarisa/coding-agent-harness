@@ -28,8 +28,26 @@ if [[ "$ENGINE" == "podman" ]]; then
     MOUNT="$ROOT:/work:Z"
 fi
 
+# Provider credentials live in .env.local (already gitignored, see
+# .env.example). Only whitelisted names are forwarded into the container, and
+# only when they are actually set — nothing is echoed.
+if [[ -f "$ROOT/.env.local" ]]; then
+    # shellcheck source=/dev/null
+    source "$ROOT/.env.local"
+fi
+ENVS=(-e CARGO_HOME=/work/.cache/cargo)
+for name in \
+    LOOM_API_BASE LOOM_API_KEY OPENAI_API_KEY \
+    LOOM_DEEPSEEK_API_BASE LOOM_DEEPSEEK_API_KEY \
+    LOOM_GPT_API_BASE LOOM_GPT_API_KEY
+do
+    if [[ -n "${!name:-}" ]]; then
+        ENVS+=(-e "$name")
+    fi
+done
+
 exec "$ENGINE" run --rm -i \
     -v "$MOUNT" \
     -w /work/src \
-    -e CARGO_HOME=/work/.cache/cargo \
+    "${ENVS[@]}" \
     "$IMAGE" "$@"

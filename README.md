@@ -36,6 +36,8 @@ make clippy
 
 首次运行会构建 `loom-dev` 镜像（Rust + git + rustfmt/clippy）。默认优先使用 `podman`，没有时回退到 `docker`；可用 `CONTAINER_ENGINE=docker` 强制指定。
 
+真实 provider 凭据放在仓库根目录的 `.env.local`（已被 `.gitignore` 的 `.env.*` 忽略，模板见 [.env.example](.env.example)）；`scripts/dev.sh` 只把白名单变量透传进容器，子进程（`bash` 工具、acceptance 命令）会剥离一切 `*_API_KEY`/`*_TOKEN`/`*_SECRET`。key 不要提交，也不要贴进对话。
+
 ## 目录
 
 ```text

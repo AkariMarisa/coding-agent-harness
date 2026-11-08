@@ -792,17 +792,16 @@ fn run_with_timeout(cmd: &str, cwd: &Path, timeout_s: u64) -> Result<(i32, Strin
     let log_path = dir.path().join("output.log");
     let log = fs::File::create(&log_path)?;
     let err = log.try_clone()?;
-    let mut child = Command::new("sh")
+    let mut child = Command::new("sh");
+    child
         .arg("-c")
         .arg(cmd)
         .current_dir(cwd)
-        .env_remove("LOOM_API_KEY")
-        .env_remove("OPENAI_API_KEY")
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err))
-        .stdin(Stdio::null())
-        .spawn()
-        .with_context(|| format!("spawn: {cmd}"))?;
+        .stdin(Stdio::null());
+    crate::scrub_child_env(&mut child);
+    let mut child = child.spawn().with_context(|| format!("spawn: {cmd}"))?;
     let started = Instant::now();
     let mut timed_out = false;
     let status = loop {

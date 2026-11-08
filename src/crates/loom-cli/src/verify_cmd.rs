@@ -489,7 +489,7 @@ pub(crate) fn run_command(cwd: &Path, cmd: &str, timeout_s: u64) -> Result<Comma
 
 fn hash_env() -> String {
     let mut entries: Vec<(String, String)> = std::env::vars()
-        .filter(|(key, _)| key.starts_with("LOOM_") || key == "PATH")
+        .filter(|(key, _)| (key.starts_with("LOOM_") || key == "PATH") && !key.contains("API_KEY"))
         .collect();
     entries.sort();
     let text = entries
