@@ -169,26 +169,84 @@ impl Provider for OpenAiProvider {
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
         });
+        // Bodies carry no credentials (the key travels in the header), so a
+        // debug dump is safe to keep next to the run logs.
+        let body_text = serde_json::to_string(&body).context("encode chat-completions request")?;
 
-        let response = ureq::post(&self.url())
-            .set("Authorization", &format!("Bearer {}", self.api_key))
-            .set("Content-Type", "application/json")
-            .timeout(self.timeout)
-            .send_json(body);
-
-        let value: Value = match response {
-            Ok(response) => response
-                .into_json()
-                .context("parse chat-completions response")?,
-            Err(ureq::Error::Status(code, response)) => {
-                let text = response.into_string().unwrap_or_default();
-                bail!("provider returned HTTP {code}: {}", truncate(&text, 800));
+        // Relays answer403/429/5xx for transient reasons ("retry later"), and
+        // killing a whole run over one blip is expensive. Three attempts with
+        // 1s/2s backoff; everything else fails fast.
+        let mut last_retry: Option<anyhow::Error> = None;
+        for attempt in 0u32..3 {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_secs(u64::from(attempt)));
             }
-            Err(error) => return Err(error).context("call provider"),
-        };
+            let response = ureq::post(&self.url())
+                .set("Authorization", &format!("Bearer {}", self.api_key))
+                .set("Content-Type", "application/json")
+                .timeout(self.timeout)
+                .send_json(&body);
 
-        parse_response(&value)
+            match response {
+                Ok(response) => {
+                    let raw = response
+                        .into_string()
+                        .context("read chat-completions response")?;
+                    debug_dump(&body_text, &raw);
+                    let value: Value =
+                        serde_json::from_str(&raw).context("parse chat-completions response")?;
+                    return parse_response(&value);
+                }
+                Err(ureq::Error::Status(code, response)) => {
+                    let text = response.into_string().unwrap_or_default();
+                    debug_dump(&body_text, &format!("HTTP {code}: {text}"));
+                    let retryable = matches!(code, 403 | 408 | 429) || (500..600).contains(&code);
+                    if retryable {
+                        last_retry = Some(anyhow::anyhow!(
+                            "provider returned HTTP {code}: {}",
+                            truncate(&text, 800)
+                        ));
+                        continue;
+                    }
+                    bail!("provider returned HTTP {code}: {}", truncate(&text, 800));
+                }
+                Err(error) => {
+                    debug_dump(&body_text, "(transport error before any response)");
+                    last_retry = Some(anyhow::Error::new(error).context("call provider"));
+                    continue;
+                }
+            }
+        }
+        Err(last_retry.unwrap_or_else(|| anyhow::anyhow!("provider request failed")))
     }
+}
+
+/// Append request/response to `<logs>/provider.debug.log` when
+/// `LOOM_NATIVE_DEBUG` is set. Used to diagnose relay compatibility.
+fn debug_dump(request_json: &str, response_text: &str) {
+    let enabled = std::env::var("LOOM_NATIVE_DEBUG")
+        .map(|value| !value.is_empty() && value != "0")
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
+    let Ok(dir) = std::env::var("LOOM_LOGS_DIR") else {
+        return;
+    };
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    use std::io::Write as _;
+    let mut file = match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(Path::new(&dir).join("provider.debug.log"))
+    {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    let _ = writeln!(file, "=== request ===\n{request_json}");
+    let _ = writeln!(file, "=== response ===\n{response_text}\n");
 }
 
 fn parse_response(value: &Value) -> Result<ChatResponse> {

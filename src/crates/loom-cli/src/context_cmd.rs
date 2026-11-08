@@ -98,12 +98,12 @@ pub(crate) fn default_prompt_role(spec: &loom_core::TaskSpec) -> PromptRole {
     match spec.role() {
         TaskRole::Judgment => PromptRole::Judgment,
         TaskRole::Review => PromptRole::Review,
+        // Every dispatched task executes a TaskSpec at any tier: escalation
+        // upgrades the model, not the prompt. The orchestrator prompt plans
+        // and decides; handing it to a frontier implement task makes the model
+        // emit TaskSpecs instead of doing the work (seen live with gpt-6.1-sol).
         TaskRole::Implement | TaskRole::SpecTests | TaskRole::Survey | TaskRole::Docs => {
-            if spec.tier == loom_core::Tier::Worker {
-                PromptRole::Worker
-            } else {
-                PromptRole::Orchestrator
-            }
+            PromptRole::Worker
         }
     }
 }
@@ -190,10 +190,29 @@ fn print_manifest(manifest: &ContextManifest, out_dir: &std::path::Path) {
 mod tests {
     use std::fs;
 
-    use loom_core::{Receipt, ReceiptStatus, VerifyEvidence, VerifyResult};
+    use loom_context::PromptRole;
+    use loom_core::{Receipt, ReceiptStatus, TaskRole, VerifyEvidence, VerifyResult};
     use loom_store::Project;
 
-    use super::load_failure_pack;
+    use super::{default_prompt_role, load_failure_pack};
+
+    #[test]
+    fn prompt_role_follows_task_role_not_tier() {
+        // Escalation upgrades the model, never the prompt: a frontier
+        // implement task must not receive the orchestrator prompt.
+        let mut spec = loom_core::TaskSpec {
+            role: TaskRole::Implement,
+            tier: loom_core::Tier::Frontier,
+            ..Default::default()
+        };
+        assert!(matches!(default_prompt_role(&spec), PromptRole::Worker));
+        spec.tier = loom_core::Tier::Worker;
+        assert!(matches!(default_prompt_role(&spec), PromptRole::Worker));
+        spec.role = TaskRole::Review;
+        assert!(matches!(default_prompt_role(&spec), PromptRole::Review));
+        spec.role = TaskRole::Judgment;
+        assert!(matches!(default_prompt_role(&spec), PromptRole::Judgment));
+    }
 
     fn write_receipt(root: &std::path::Path, receipt: &Receipt) {
         let outbox = root.join(".loom/runs/R-1/outbox");

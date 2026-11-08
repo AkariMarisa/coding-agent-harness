@@ -176,11 +176,22 @@ pub fn run(
     let spec = read_spec(&request.packet_dir)?;
     let config = config.unwrap_or_else(|| NativeConfig::from_spec(&spec, request.timeout_s));
 
-    let system = read_optional(&request.packet_dir.join("system.md"))
+    let system_file = request.packet_dir.join("system.md");
+    let system_from_file = read_optional(&system_file);
+    let system = system_from_file
+        .clone()
         .unwrap_or_else(|| default_system(&spec));
     let packet = read_optional(&request.packet_dir.join("packet.md"))
         .or_else(|| read_optional(&request.packet_dir.join("task.json")))
         .unwrap_or_else(|| serde_json::to_string_pretty(&spec).unwrap_or_default());
+    // packet.md embeds a copy of the system section so single-prompt adapters
+    // stay self-contained. When system.md was loaded separately, drop that
+    // section instead of paying for the same prompt twice on every call.
+    let packet = if system_from_file.is_some() {
+        strip_section(&packet, "system")
+    } else {
+        packet
+    };
 
     let mut messages = vec![
         ChatMessage::system(system),
@@ -465,6 +476,24 @@ fn read_optional(path: &Path) -> Option<String> {
     fs::read_to_string(path)
         .ok()
         .filter(|text| !text.trim().is_empty())
+}
+
+/// Remove one `<!-- loom:section <name> -->` block from a compiled packet.
+/// Markers are written by `loom-context`, so this is a contract, not a guess.
+fn strip_section(packet: &str, name: &str) -> String {
+    let marker = format!("<!-- loom:section {name} -->");
+    let Some(start) = packet.find(&marker) else {
+        return packet.to_string();
+    };
+    let after = start + marker.len();
+    let end = packet[after..]
+        .find("<!-- loom:section ")
+        .map(|offset| after + offset)
+        .unwrap_or(packet.len());
+    let mut stripped = String::with_capacity(packet.len());
+    stripped.push_str(&packet[..start]);
+    stripped.push_str(&packet[end..]);
+    stripped.trim_start().to_string()
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
@@ -921,6 +950,18 @@ fn git_head(worktree: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use crate::provider::ScriptedProvider;
+
+    #[test]
+    fn strip_section_drops_only_the_named_block() {
+        let packet =
+            "<!-- loom:section system -->\nsystem text\n<!-- loom:section goal -->\ngoal text\n";
+        let stripped = strip_section(packet, "system");
+        assert!(!stripped.contains("system text"));
+        assert!(stripped.starts_with("<!-- loom:section goal -->"));
+        assert!(stripped.contains("goal text"));
+        // A section that is not present is a no-op.
+        assert_eq!(strip_section(packet, "schema"), packet);
+    }
 
     fn request(dir: &Path) -> NativeRequest {
         let packet = dir.join("context");
