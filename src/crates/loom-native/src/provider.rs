@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
-use loom_core::Wire;
+use loom_core::{ModelCapability, Wire};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -143,28 +143,43 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn from_env() -> Result<Self> {
-        Self::from_env_with_wire(Wire::Chat)
+        Self::from_env_with_capability(None)
     }
 
+    /// Build from the selected model's capability: the wire, the endpoint,
+    /// and which env var holds the key come from `[[models]]` config; key
+    /// *values* still only come from the environment.
+    pub fn from_env_with_capability(capability: Option<&ModelCapability>) -> Result<Self> {
+        let wire = capability
+            .map(|capability| capability.wire)
+            .unwrap_or_default();
+        if matches!(wire, Wire::Responses) {
+            bail!("wire=responses is not implemented in the native executor; use chat or messages");
+        }
+        let (base_url, api_key) = resolve_endpoint(
+            capability,
+            std::env::var("LOOM_API_BASE").ok(),
+            std::env::var("LOOM_API_KEY")
+                .ok()
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok()),
+            &|name| std::env::var(name).ok(),
+        )?;
+        Ok(Self {
+            base_url,
+            api_key,
+            timeout: Duration::from_secs(timeout_from_env()),
+            wire,
+        })
+    }
+
+    /// Force a wire without touching model config (tests and probes).
     pub fn from_env_with_wire(wire: Wire) -> Result<Self> {
         if matches!(wire, Wire::Responses) {
             bail!("wire=responses is not implemented in the native executor; use chat or messages");
         }
-        let api_key = std::env::var("LOOM_API_KEY")
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .context("LOOM_API_KEY (or OPENAI_API_KEY) is required for the native executor")?;
-        let base_url = std::env::var("LOOM_API_BASE")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-        let timeout_s = std::env::var("LOOM_API_TIMEOUT_S")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(180);
-        Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            api_key,
-            timeout: Duration::from_secs(timeout_s),
-            wire,
-        })
+        let mut provider = Self::from_env_with_capability(None)?;
+        provider.wire = wire;
+        Ok(provider)
     }
 
     fn url(&self) -> String {
@@ -187,6 +202,38 @@ impl OpenAiProvider {
             _ => vec![("authorization", bearer)],
         }
     }
+}
+
+fn timeout_from_env() -> u64 {
+    std::env::var("LOOM_API_TIMEOUT_S")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(180)
+}
+
+/// Endpoint resolution order: per-model config first, then environment, then
+/// the OpenAI default. `key_lookup` reads the variable named by `key_env`;
+/// the value itself never comes from config.
+fn resolve_endpoint(
+    capability: Option<&ModelCapability>,
+    base_env: Option<String>,
+    global_key: Option<String>,
+    key_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<(String, String)> {
+    let base_url = capability
+        .and_then(|capability| capability.base_url.clone())
+        .or(base_env)
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    let api_key = match capability.and_then(|capability| capability.key_env.as_deref()) {
+        Some(name) => key_lookup(name)
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| {
+                format!("key_env = {name} is not set for this model; export it (see .env.example)")
+            })?,
+        None => global_key
+            .context("LOOM_API_KEY (or OPENAI_API_KEY) is required for the native executor")?,
+    };
+    Ok((base_url.trim_end_matches('/').to_string(), api_key))
 }
 
 impl Provider for OpenAiProvider {
@@ -798,6 +845,58 @@ mod tests {
         assert!(
             OpenAiProvider::from_env_with_wire(loom_core::Wire::Responses).is_err(),
             "responses wire must fail fast with a clear message"
+        );
+    }
+
+    #[test]
+    fn endpoint_prefers_model_config_over_environment() {
+        let capability = ModelCapability {
+            alias: "deepseek-official".into(),
+            base_url: Some("https://api.deepseek.com/v1/".into()),
+            key_env: Some("DEEPSEEK_OFFICIAL_API_KEY".into()),
+            ..ModelCapability::default()
+        };
+        let lookup =
+            |name: &str| (name == "DEEPSEEK_OFFICIAL_API_KEY").then(|| "sk-official".to_string());
+        let (base, key) = resolve_endpoint(
+            Some(&capability),
+            Some("https://relay.example.com/v1".into()),
+            Some("sk-relay".into()),
+            &lookup,
+        )
+        .expect("resolve");
+        assert_eq!(
+            base, "https://api.deepseek.com/v1",
+            "trailing slash trimmed"
+        );
+        assert_eq!(key, "sk-official", "key_env wins over the global key");
+    }
+
+    #[test]
+    fn endpoint_falls_back_to_environment_without_capability() {
+        let (base, key) = resolve_endpoint(
+            None,
+            Some("https://relay.example.com/v1".into()),
+            Some("sk-relay".into()),
+            &|_| None,
+        )
+        .expect("resolve");
+        assert_eq!(base, "https://relay.example.com/v1");
+        assert_eq!(key, "sk-relay");
+    }
+
+    #[test]
+    fn missing_key_env_is_a_clear_error() {
+        let capability = ModelCapability {
+            alias: "deepseek-official".into(),
+            key_env: Some("DEEPSEEK_OFFICIAL_API_KEY".into()),
+            ..ModelCapability::default()
+        };
+        let error = resolve_endpoint(Some(&capability), None, Some("sk-relay".into()), &|_| None)
+            .expect_err("missing key must fail");
+        assert!(
+            error.to_string().contains("DEEPSEEK_OFFICIAL_API_KEY"),
+            "error must name the missing variable: {error:#}"
         );
     }
 

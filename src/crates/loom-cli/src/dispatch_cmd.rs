@@ -111,6 +111,21 @@ fn prepare_attempt(
     let model_alias = route.alias.clone();
     let model_id = route.model_id.clone();
     let model_capability = config.model(&model_alias).cloned();
+    // Fail fast when the model names its own key variable: better a config
+    // error before any run state exists than an adapter exit 4 later.
+    if let Some(capability) = &model_capability {
+        if let Some(name) = &capability.key_env {
+            let missing = std::env::var(name)
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true);
+            if missing {
+                anyhow::bail!(
+                    "model {} needs the {name} environment variable; set it in .env.local (see .env.example)",
+                    capability.alias
+                );
+            }
+        }
+    }
     let previous_run = find_run_for_task(project, task_id, None)?;
     let failure_pack = load_failure_pack(project, task_id, &previous_run)?;
 

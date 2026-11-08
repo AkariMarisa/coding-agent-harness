@@ -139,6 +139,14 @@ pub struct ModelCapability {
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Per-model endpoint. Overrides `LOOM_API_BASE`, so one dispatch can
+    /// switch relays just by picking a different alias.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Name of the environment variable holding this model's API key. Only
+    /// the name lives in config; the value never enters the repo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_env: Option<String>,
     pub tier: Tier,
     pub wire: Wire,
     pub thinking_mode: ThinkingMode,
@@ -193,6 +201,33 @@ impl ModelCapability {
             if max_output > context {
                 return Err(format!(
                     "{}: max_output ({max_output}) exceeds context_window ({context})",
+                    self.alias
+                ));
+            }
+        }
+        if let Some(url) = self.base_url.as_deref() {
+            let url = url.trim();
+            if url.is_empty() {
+                return Err(format!("{}: base_url must not be empty", self.alias));
+            }
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(format!(
+                    "{}: base_url must start with http:// or https://",
+                    self.alias
+                ));
+            }
+        }
+        if let Some(name) = self.key_env.as_deref() {
+            let valid = name
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            if !valid {
+                return Err(format!(
+                    "{}: key_env must be an environment variable name like DEEPSEEK_API_KEY",
                     self.alias
                 ));
             }
@@ -282,6 +317,27 @@ mod tests {
 
         model.context_window = Some(100);
         model.input_usd_per_mtok = Some(-1.0);
+        assert!(model.validate().is_err());
+    }
+
+    #[test]
+    fn validates_per_model_endpoint_fields() {
+        let mut model = ModelCapability::new("worker", Tier::Worker);
+        model.base_url = Some("https://api.deepseek.com/v1".into());
+        model.key_env = Some("DEEPSEEK_API_KEY".into());
+        assert!(model.validate().is_ok());
+
+        model.base_url = Some("api.deepseek.com".into());
+        assert!(model.validate().is_err(), "scheme is required");
+
+        model.base_url = Some("   ".into());
+        assert!(model.validate().is_err(), "blank url is rejected");
+
+        model.base_url = None;
+        model.key_env = Some("BAD-NAME".into());
+        assert!(model.validate().is_err(), "env var names are restricted");
+
+        model.key_env = Some("1LEADING_DIGIT".into());
         assert!(model.validate().is_err());
     }
 

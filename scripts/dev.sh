@@ -47,6 +47,12 @@ do
         ENVS+=(-e "$name")
     fi
 done
+# Also forward any exported *_API_KEY so [[models]] key_env can name it.
+while IFS= read -r name; do
+    case "$name" in
+        *_API_KEY) ENVS+=(-e "$name") ;;
+    esac
+done < <(compgen -e)
 
 exec "$ENGINE" run --rm -i \
     -v "$MOUNT" \

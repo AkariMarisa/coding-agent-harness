@@ -103,9 +103,20 @@ LOOM_NATIVE_SCRIPT=/path/to/script.json loom dispatch T-001 --adapter native --i
 
 ### 路由与升级
 
-路由是确定性的，不调用 LLM 判断任务难度。`.loom/config.toml` 可以显式配置 `role → tier`、升级阈值、fallback 和 tier 成本上限：
+路由是确定性的，不调用 LLM 判断任务难度。`.loom/config.toml` 先用 `[[models]]` 注册模型别名（每个 alias 可以指向不同中转），再用 `role → tier`、升级阈值、fallback 和 tier 成本上限配置路由：
 
 ```toml
+[[models]]
+alias = "worker"
+model_id = "deepseek-chat"        # provider 侧的真实模型名
+tier = "worker"
+wire = "chat"                     # chat | messages；responses 未实现
+tool_calls = true
+base_url = "https://api.deepseek.com/v1"   # 可选：覆盖全局 LOOM_API_BASE
+key_env = "DEEPSEEK_API_KEY"      # 可选：该模型用哪个环境变量装 key（只存变量名，值只在 .env.local）
+input_usd_per_mtok = 0.27         # 价格表可选；缺省时 cost 记 unknown
+output_usd_per_mtok = 1.10
+
 [routing]
 escalate_after_failures = 2      # worker 连续失败 2 次后升级
 max_escalations_per_task = 1

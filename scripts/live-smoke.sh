@@ -32,8 +32,10 @@ fi
 
 DEEPSEEK_MODEL="${LOOM_LIVE_DEEPSEEK_MODEL:-deepseek-flash}"
 DEEPSEEK_WIRE="${LOOM_LIVE_DEEPSEEK_WIRE:-chat}"
+DEEPSEEK_BASE="${LOOM_DEEPSEEK_API_BASE:-}"
 GPT_MODEL="${LOOM_LIVE_GPT_MODEL:-gpt-6.1-sol}"
 GPT_WIRE="${LOOM_LIVE_GPT_WIRE:-chat}"
+GPT_BASE="${LOOM_GPT_API_BASE:-}"
 export LOOM_API_TIMEOUT_S="${LOOM_API_TIMEOUT_S:-60}"
 
 cargo build -q --manifest-path /work/src/Cargo.toml -p loom-cli -p loom-native
@@ -69,21 +71,34 @@ EOF
 # compatibility (bodies carry no credentials).
 export LOOM_NATIVE_DEBUG=1
 
-cat > /work/.smoke-live/.loom/config.toml <<EOF
+# base_url + key_env exercise the per-model endpoint switch: each alias
+# carries its own relay, so one dispatch can cross providers. Only models
+# whose relay base is configured get an entry (LOOM_LIVE_ONLY may skip one).
+: > /work/.smoke-live/.loom/config.toml
+if [ -n "$DEEPSEEK_BASE" ]; then
+    cat >> /work/.smoke-live/.loom/config.toml <<EOF
 [[models]]
 alias = "live-deepseek"
 tier = "worker"
 model_id = "$DEEPSEEK_MODEL"
 tool_calls = true
 wire = "$DEEPSEEK_WIRE"
-
+base_url = "$DEEPSEEK_BASE"
+key_env = "LOOM_DEEPSEEK_API_KEY"
+EOF
+fi
+if [ -n "$GPT_BASE" ]; then
+    cat >> /work/.smoke-live/.loom/config.toml <<EOF
 [[models]]
 alias = "live-gpt"
 tier = "frontier"
 model_id = "$GPT_MODEL"
 tool_calls = true
 wire = "$GPT_WIRE"
+base_url = "$GPT_BASE"
+key_env = "LOOM_GPT_API_KEY"
 EOF
+fi
 
 gen_task() {
     local n="$1" tier="$2" file="$3" title="$4"
@@ -152,9 +167,7 @@ report_run() {
 }
 
 run_live() {
-    local n="$1" alias="$2" base="$3" key="$4" label="$5"
-    export LOOM_API_BASE="$base"
-    export LOOM_API_KEY="$key"
+    local n="$1" alias="$2" label="$3"
     echo "== $label ($alias) =="
     local started=$SECONDS
     if ! loom --format pretty dispatch "T-20261108-$n" --adapter native --model "$alias"; then
@@ -171,10 +184,10 @@ run_live() {
 
 fail=0
 if [ "$ONLY" = "both" ] || [ "$ONLY" = "deepseek" ]; then
-    run_live 021 live-deepseek "$LOOM_DEEPSEEK_API_BASE" "$LOOM_DEEPSEEK_API_KEY" "$DEEPSEEK_MODEL" || fail=1
+    run_live 021 live-deepseek "$DEEPSEEK_MODEL" || fail=1
 fi
 if [ "$ONLY" = "both" ] || [ "$ONLY" = "gpt" ]; then
-    run_live 022 live-gpt "$LOOM_GPT_API_BASE" "$LOOM_GPT_API_KEY" "$GPT_MODEL" || fail=1
+    run_live 022 live-gpt "$GPT_MODEL" || fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
