@@ -141,7 +141,7 @@ make check
 2. 真实 goose/OpenCode adapter canary（需安装二进制）；
 3. native vs adapter A/B（同任务集，按 CPVT/TPVT/墙钟）；
 4. 用真实仓库校准 `tool_output_ratio` / `spill_rate` / 成本估算；
-5. 3 并行 A/B 与真实仓库合并冲突率统计（需真实模型/任务集）；
+5. 真实仓库的合并冲突率统计（3 并行 A/B 已用 `scripts/ab-parallel.sh` 实测：wall 13s→6s、tokens 仅 +5.8%、cache 48%→89%，见 `doc/08` §9.5）；
 6. 记录 CPVT/TPVT/WPT 基线。
 
 当前卡点详见 `doc/14-当前问题与卡点.md`。

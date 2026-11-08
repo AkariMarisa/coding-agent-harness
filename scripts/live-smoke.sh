@@ -11,10 +11,12 @@
 set -euo pipefail
 cd /work
 
-# Hard token cap: per-task budget is40k input +12k output (thinking models
-# can burn thousands of output tokens deliberating in a single step — the
-# relay's deepseek-flash once spent3794 on one), and the script fails if the
-# whole run exceeds100k input+output.
+# Hard token cap: LOOM_LIVE_MAX_TOKENS (default20000) covers input+output for
+# the whole script, and the total is re-checked after every run so the first
+# run cannot quietly spend the entire budget before the second starts.
+# Per-task budgets (18k input +4k output) are the native-side backstop:
+# thinking models can burn thousands of output tokens in a single step.
+TOKEN_CAP="${LOOM_LIVE_MAX_TOKENS:-20000}"
 
 ONLY="${LOOM_LIVE_ONLY:-both}"
 
@@ -45,6 +47,24 @@ export LOOM_API_TIMEOUT_S="${LOOM_API_TIMEOUT_S:-60}"
 
 cargo build -q --manifest-path /work/src/Cargo.toml -p loom-cli -p loom-native
 LOOM_BIN=/work/src/target/debug/loom
+
+token_total() {
+    cat /work/.smoke-live/.loom/runs/*/outbox/usage.jsonl 2>/dev/null \
+        | grep -oE '"(input|output)_tokens":[0-9]+' \
+        | grep -oE '[0-9]+' \
+        | awk '{sum += $1} END {print sum + 0}' \
+        || true
+}
+
+cap_check() {
+    local total
+    total=$(token_total)
+    echo "tokens so far: $total (cap $TOKEN_CAP)"
+    if [ "$total" -gt "$TOKEN_CAP" ]; then
+        echo "token cap exceeded: $total > $TOKEN_CAP" >&2
+        exit 1
+    fi
+}
 
 rm -rf /work/.smoke-live
 mkdir -p /work/.smoke-live
@@ -127,7 +147,7 @@ gen_task() {
   "inputs": [],
   "constraints": {"max_files_touched": 4, "no_new_dependencies": true, "style": []},
   "acceptance": [{"id": "A1", "cmd": "test -f $file", "expect_exit": 0, "timeout_s": 30}],
-  "budget": {"max_input_tokens": 40000, "max_output_tokens": 12000, "max_steps": 8, "max_wall_s": 600, "max_cost_usd": 0.25},
+  "budget": {"max_input_tokens": 18000, "max_output_tokens": 4000, "max_steps": 8, "max_wall_s": 600, "max_cost_usd": 0.25},
   "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": ["verify_log"]}
 }
 EOF
@@ -190,28 +210,17 @@ run_live() {
 fail=0
 if [ "$ONLY" = "both" ] || [ "$ONLY" = "deepseek" ]; then
     run_live 021 live-deepseek "$DEEPSEEK_MODEL" || fail=1
+    cap_check
 fi
 if [ "$ONLY" = "both" ] || [ "$ONLY" = "gpt" ]; then
     run_live 022 live-gpt "$GPT_MODEL" || fail=1
+    cap_check
 fi
+
+cap_check # final authoritative total
 
 if [ "$fail" -ne 0 ]; then
     echo "LIVE_SMOKE_FAILED"
-    exit 1
-fi
-
-# Hard token cap for the whole script: input+output across both runs must
-# stay under 100k (cached tokens are a subset of input and not double
-# counted). Per-task budgets already cap each run at 40k+5k.
-total_tokens=$(
-    cat /work/.smoke-live/.loom/runs/*/outbox/usage.jsonl 2>/dev/null \
-        | grep -oE '"(input|output)_tokens":[0-9]+' \
-        | grep -oE '[0-9]+' \
-        | awk '{sum += $1} END {print sum + 0}'
-)
-echo "total tokens this run: $total_tokens (cap 100000)"
-if [ "$total_tokens" -gt 100000 ]; then
-    echo "token cap exceeded" >&2
     exit 1
 fi
 echo "LIVE_SMOKE_OK"
