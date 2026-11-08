@@ -13,8 +13,8 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | 工具输出协议 | v0.1，见 [doc/10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md) |
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
 | 已实现 | `loom init/doctor/status`、`loom board`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom merge`、`loom resume` |
-| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实 CPVT/成本校准、3 并行 A/B（需真实模型）。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
-| 已设计未实现 | 写入抖动（churn）治理、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md) |
+| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实账单对账。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
+| 已设计未实现 | churn 治理余项（patch-first/write 守卫、token 归因；步骤级投影已实现）、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md) |
 
 ## 快速开始
 
@@ -94,7 +94,7 @@ loom dispatch T-001 --adapter native
 LOOM_NATIVE_SCRIPT=/path/to/script.json loom dispatch T-001 --adapter native --in-place
 ```
 
-可选环境变量：`LOOM_NATIVE_BIN`（指定二进制路径）、`LOOM_NATIVE_MAX_TOKENS`、`LOOM_NATIVE_MAX_IDLE`、`LOOM_NATIVE_MAX_VERIFY_ROUNDS`、`LOOM_NATIVE_TEMPERATURE`、`LOOM_NATIVE_SKIP_ACCEPTANCE`。
+可选环境变量：`LOOM_NATIVE_BIN`（指定二进制路径）、`LOOM_NATIVE_MAX_TOKENS`、`LOOM_NATIVE_MAX_IDLE`、`LOOM_NATIVE_MAX_VERIFY_ROUNDS`、`LOOM_NATIVE_TEMPERATURE`、`LOOM_NATIVE_SKIP_ACCEPTANCE`、`LOOM_NATIVE_DEBUG`（请求/响应转储到 run 日志）、`LOOM_NATIVE_HISTORY_BYTES` / `LOOM_NATIVE_KEEP_TURNS` / `LOOM_NATIVE_MIN_CLEAR`（步骤级投影，0 关闭；见 [doc/15](doc/15-Agent运行时治理与工程化.md) §1）。
 
 - acceptance 在 native 内预跑；失败时把命令、退出码和截断输出回灌给模型，默认最多 2 轮（`LOOM_NATIVE_MAX_VERIFY_ROUNDS`，最小 1），轮次耗尽标记 `failed`。
 - 成本：provider 返回成本时记 `cost_source=provider`；否则用派发模型的 `ModelCapability` 价格表估算并记 `pricing_table`；价格未知则省略 `cost_usd` 并记 `unknown`。估算成本同样计入 `TaskBudget.max_cost_usd`，超限以 `budget_exceeded` / exit 3 停止。

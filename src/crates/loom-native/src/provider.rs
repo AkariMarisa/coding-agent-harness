@@ -12,7 +12,7 @@ use loom_core::{ModelCapability, Wire};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -717,7 +717,7 @@ impl ScriptedProvider {
 }
 
 impl Provider for ScriptedProvider {
-    fn complete(&mut self, _request: &ChatRequest) -> Result<ChatResponse> {
+    fn complete(&mut self, request: &ChatRequest) -> Result<ChatResponse> {
         let response = self
             .responses
             .get(self.cursor)
@@ -742,10 +742,22 @@ impl Provider for ScriptedProvider {
             })
             .collect();
 
-        Ok(ChatResponse {
+        let chat_response = ChatResponse {
             message: ChatMessage::assistant(response.content.clone(), tool_calls),
             usage: response.usage.clone(),
-        })
+        };
+        // Mirror the live provider: with LOOM_NATIVE_DEBUG set, dump the exact
+        // (projected) request body so offline runs can assert on it too.
+        if let Ok(body) = serde_json::to_string(&build_chat_body(request)) {
+            let text = json!({
+                "scripted": true,
+                "message": chat_response.message,
+                "usage": chat_response.usage,
+            })
+            .to_string();
+            debug_dump(&body, &text);
+        }
+        Ok(chat_response)
     }
 }
 

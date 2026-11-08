@@ -149,6 +149,6 @@ make check
 **已设计待实现**：
 
 - 多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。
-- 运行时治理与工程化（churn 指标与分级干预、`questions.json` + `needs_input` + attention inbox、skills 扫描/按需加载/验证晋升、agent/harness 驱动的本地 CI 与 hooks/review/attestation），见 `doc/15-Agent运行时治理与工程化.md`。
+- 运行时治理与工程化（步骤级上下文投影已实现：`loom-native/src/project.rs` + `scripts/smoke-churn.sh`，knob 见 README；其余——churn 指标与分级干预、patch-first/write 守卫、`questions.json` + `needs_input` + attention inbox、skills 扫描/按需加载/验证晋升、agent/harness 驱动的本地 CI 与 hooks/review/attestation——见 `doc/15-Agent运行时治理与工程化.md`）。
 
 **不要提前做**：embedding/向量库、MCP、跨项目知识库、自动规划、并行调度、把成员仓库合并成 monorepo。

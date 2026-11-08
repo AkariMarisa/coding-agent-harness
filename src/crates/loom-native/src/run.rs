@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use loom_core::{truncate_bytes, ModelCapability, TaskSpec};
 use serde_json::{json, Value};
 
@@ -23,6 +23,9 @@ use crate::tools::ToolBox;
 
 pub const NATIVE_VERSION: &str = "0.1.0";
 const DEFAULT_MAX_IDLE_STEPS: u32 = 6;
+const DEFAULT_HISTORY_BYTES: usize = 24 * 1024;
+const DEFAULT_KEEP_TURNS: usize = 4;
+const DEFAULT_MIN_CLEAR_TOKENS: usize = 2000;
 const DEFAULT_MAX_VERIFY_ROUNDS: u32 = 2;
 const DEFAULT_MAX_TOKENS_PER_CALL: u64 = 8_192;
 const MAX_FAILURE_CMD_BYTES: usize = 3 * 1024;
@@ -99,6 +102,12 @@ pub struct NativeConfig {
     pub max_tokens_per_call: u64,
     pub temperature: f64,
     pub run_acceptance: bool,
+    /// Dynamic-tail size that turns step-level projection on; 0 disables it.
+    pub max_history_bytes: usize,
+    /// Assistant turns kept verbatim at the tail of history.
+    pub keep_recent_turns: usize,
+    /// Projection is skipped unless it saves at least this many tokens.
+    pub min_clear_tokens: usize,
 }
 
 impl NativeConfig {
@@ -131,6 +140,18 @@ impl NativeConfig {
             run_acceptance: std::env::var("LOOM_NATIVE_SKIP_ACCEPTANCE")
                 .map(|value| value == "0" || value.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
+            max_history_bytes: std::env::var("LOOM_NATIVE_HISTORY_BYTES")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(DEFAULT_HISTORY_BYTES),
+            keep_recent_turns: std::env::var("LOOM_NATIVE_KEEP_TURNS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(DEFAULT_KEEP_TURNS),
+            min_clear_tokens: std::env::var("LOOM_NATIVE_MIN_CLEAR")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(DEFAULT_MIN_CLEAR_TOKENS),
         }
     }
 }
@@ -229,9 +250,27 @@ pub fn run(
         steps += 1;
         toolbox.set_step(steps);
         let call_started = Instant::now();
+        // Step-level projection: the stable prefix (system + packet) and the
+        // most recent turns ship verbatim; old tool payloads ship as bounded
+        // summaries so they stop compounding on every request (doc/15 §1.3A).
+        let send_messages = crate::project::project_messages(
+            &messages,
+            config.keep_recent_turns,
+            config.max_history_bytes,
+            config.min_clear_tokens,
+        );
+        if send_messages.len() != messages.len() {
+            // Only length can change if a bug ever dropped messages; assert it
+            // loudly instead of silently corrupting tool_call pairing.
+            bail!(
+                "history projection changed message count: {} -> {}",
+                messages.len(),
+                send_messages.len()
+            );
+        }
         let response = provider.complete(&ChatRequest {
             model: request.model_id.clone(),
-            messages: messages.clone(),
+            messages: send_messages,
             tools: tools.clone(),
             max_tokens: config.max_tokens_per_call,
             temperature: config.temperature,

@@ -148,6 +148,21 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 明确：**L2 不是主手段**。它的价值是“防止下一次全文进入历史”，而不是“省下这一次写入”。如果 L2 让模型反复重试，应该回退到 L1/L3。
 
+> **实现状态（2026-11-08，杠杆 A 已落地）**：步骤级投影在 `loom-native` 实现——
+> `src/crates/loom-native/src/project.rs`。规则：动态尾部（system+packet 之后）
+> 超过 `LOOM_NATIVE_HISTORY_BYTES`（默认 24KB，0 关闭）且预估节省 ≥
+> `LOOM_NATIVE_MIN_CLEAR`（默认 2000 tokens）时，把旧 assistant 的大
+> `write`/`edit` 参数压成 `[elided …]` 引用（保留 path/id/reasoning_content）、
+> 旧 tool 结果压成首行 + elision 标记（保留 artifact 路径），最近
+> `LOOM_NATIVE_KEEP_TURNS`（默认 4）轮与稳定前缀原样保留。
+> 只替换内容、不删除消息（`tool_call_id` 配对不可能孤儿）；`reasoning_content`
+> 永不剥离（官方 DeepSeek 强制回传）；投影确定性且幂等（消息跨过保留边界只变一次，
+> 阈值按“完整历史”单调判定，不会抖动）。
+> 离线验证：6 个单测 + `scripts/smoke-churn.sh`（EARLY 输出被投影、LATE 保留）；
+> `smoke.sh` / `smoke-native.sh` / `smoke-parallel.sh` 回归全绿。
+> **未做**：杠杆 B（patch-first / write 守卫）、杠杆 C（token 归因、`churn.json`、
+> `loom churn stats`）、L1–L3 干预阶梯。
+
 ### 1.6 外部 adapter
 
 外部 agent 拥有自己的会话历史，Loom 无法逐步投影。能做的只有：

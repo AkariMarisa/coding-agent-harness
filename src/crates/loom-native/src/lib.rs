@@ -1,6 +1,7 @@
 //! Native executor crate. The binary is a process-level adapter; the library is
 //! also usable from tests with a scripted provider.
 
+mod project;
 mod provider;
 mod run;
 mod tools;
