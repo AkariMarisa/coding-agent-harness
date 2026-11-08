@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
+use loom_core::Wire;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -129,15 +130,26 @@ pub trait Provider {
     fn complete(&mut self, request: &ChatRequest) -> Result<ChatResponse>;
 }
 
-/// OpenAI-compatible provider (OpenAI, DeepSeek, LiteLLM, OpenRouter, ...).
+/// LLM wire spoken by the native executor. `chat` is OpenAI
+/// chat-completions; `messages` is the Anthropic Messages shape, needed for
+/// relay-aggregated models whose upstream speaks Anthropic natively (their
+/// chat translation of tool history is what403/400s on such relays).
 pub struct OpenAiProvider {
     base_url: String,
     api_key: String,
     timeout: Duration,
+    wire: Wire,
 }
 
 impl OpenAiProvider {
     pub fn from_env() -> Result<Self> {
+        Self::from_env_with_wire(Wire::Chat)
+    }
+
+    pub fn from_env_with_wire(wire: Wire) -> Result<Self> {
+        if matches!(wire, Wire::Responses) {
+            bail!("wire=responses is not implemented in the native executor; use chat or messages");
+        }
         let api_key = std::env::var("LOOM_API_KEY")
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
             .context("LOOM_API_KEY (or OPENAI_API_KEY) is required for the native executor")?;
@@ -151,27 +163,42 @@ impl OpenAiProvider {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             timeout: Duration::from_secs(timeout_s),
+            wire,
         })
     }
 
     fn url(&self) -> String {
-        format!("{}/chat/completions", self.base_url)
+        match self.wire {
+            Wire::Messages => format!("{}/messages", self.base_url),
+            _ => format!("{}/chat/completions", self.base_url),
+        }
+    }
+
+    /// Auth headers per wire. Messages sends both key styles plus the
+    /// version header: the relay probe needed all three to pass.
+    fn headers(&self) -> Vec<(&'static str, String)> {
+        let bearer = format!("Bearer {}", self.api_key);
+        match self.wire {
+            Wire::Messages => vec![
+                ("x-api-key", self.api_key.clone()),
+                ("authorization", bearer),
+                ("anthropic-version", "2023-06-01".to_string()),
+            ],
+            _ => vec![("authorization", bearer)],
+        }
     }
 }
 
 impl Provider for OpenAiProvider {
     fn complete(&mut self, request: &ChatRequest) -> Result<ChatResponse> {
-        let body = json!({
-            "model": request.model,
-            "messages": request.messages,
-            "tools": request.tools,
-            "tool_choice": "auto",
-            "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
-        });
+        let body = match self.wire {
+            Wire::Messages => build_messages_body(request),
+            _ => build_chat_body(request),
+        };
         // Bodies carry no credentials (the key travels in the header), so a
         // debug dump is safe to keep next to the run logs.
-        let body_text = serde_json::to_string(&body).context("encode chat-completions request")?;
+        let body_text = serde_json::to_string(&body).context("encode provider request")?;
+        let headers = self.headers();
 
         // Relays answer403/429/5xx for transient reasons ("retry later"), and
         // killing a whole run over one blip is expensive. Three attempts with
@@ -181,21 +208,24 @@ impl Provider for OpenAiProvider {
             if attempt > 0 {
                 std::thread::sleep(Duration::from_secs(u64::from(attempt)));
             }
-            let response = ureq::post(&self.url())
-                .set("Authorization", &format!("Bearer {}", self.api_key))
+            let mut req = ureq::post(&self.url())
                 .set("Content-Type", "application/json")
-                .timeout(self.timeout)
-                .send_json(&body);
+                .timeout(self.timeout);
+            for (name, value) in &headers {
+                req = req.set(name, value);
+            }
+            let response = req.send_json(&body);
 
             match response {
                 Ok(response) => {
-                    let raw = response
-                        .into_string()
-                        .context("read chat-completions response")?;
+                    let raw = response.into_string().context("read provider response")?;
                     debug_dump(&body_text, &raw);
                     let value: Value =
-                        serde_json::from_str(&raw).context("parse chat-completions response")?;
-                    return parse_response(&value);
+                        serde_json::from_str(&raw).context("parse provider response")?;
+                    return match self.wire {
+                        Wire::Messages => parse_messages_response(&value),
+                        _ => parse_response(&value),
+                    };
                 }
                 Err(ureq::Error::Status(code, response)) => {
                     let text = response.into_string().unwrap_or_default();
@@ -218,6 +248,196 @@ impl Provider for OpenAiProvider {
             }
         }
         Err(last_retry.unwrap_or_else(|| anyhow::anyhow!("provider request failed")))
+    }
+}
+
+fn build_chat_body(request: &ChatRequest) -> Value {
+    json!({
+        "model": request.model,
+        "messages": request.messages,
+        "tools": request.tools,
+        "tool_choice": "auto",
+        "max_tokens": request.max_tokens,
+        "temperature": request.temperature,
+    })
+}
+
+/// Anthropic Messages body from our wire-neutral history.
+///
+/// Mapping: `system` messages become the top-level `system` field; `tool`
+/// messages become `tool_result` blocks inside the user message that follows
+/// the assistant `tool_use` turn (consecutive results are batched, as the
+/// API requires); `temperature` is omitted because thinking models reject
+/// non-default values and the relay default is fine.
+fn build_messages_body(request: &ChatRequest) -> Value {
+    let mut system: Vec<String> = Vec::new();
+    let mut messages: Vec<Value> = Vec::new();
+    let mut tool_results: Vec<Value> = Vec::new();
+
+    for message in &request.messages {
+        match message.role.as_str() {
+            "system" => {
+                if let Some(text) = &message.content {
+                    system.push(text.clone());
+                }
+            }
+            "user" => {
+                flush_tool_results(&mut messages, &mut tool_results);
+                messages.push(json!({
+                    "role": "user",
+                    "content": message.content.clone().unwrap_or_default(),
+                }));
+            }
+            "assistant" => {
+                flush_tool_results(&mut messages, &mut tool_results);
+                let mut blocks: Vec<Value> = Vec::new();
+                if let Some(text) = message.content.as_deref().filter(|text| !text.is_empty()) {
+                    blocks.push(json!({"type": "text", "text": text}));
+                }
+                let mut has_calls = false;
+                if let Some(calls) = &message.tool_calls {
+                    for call in calls {
+                        has_calls = true;
+                        let input: Value = serde_json::from_str(&call.arguments)
+                            .unwrap_or_else(|_| json!({ "raw": call.arguments }));
+                        blocks.push(json!({
+                            "type": "tool_use",
+                            "id": call.id,
+                            "name": call.name,
+                            "input": input,
+                        }));
+                    }
+                }
+                if blocks.is_empty() {
+                    continue;
+                }
+                if has_calls {
+                    messages.push(json!({ "role": "assistant", "content": blocks }));
+                } else {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": message.content.clone().unwrap_or_default(),
+                    }));
+                }
+            }
+            "tool" => {
+                tool_results.push(json!({
+                    "type": "tool_result",
+                    "tool_use_id": message.tool_call_id.clone().unwrap_or_default(),
+                    "content": message.content.clone().unwrap_or_default(),
+                }));
+            }
+            _ => {}
+        }
+    }
+    flush_tool_results(&mut messages, &mut tool_results);
+
+    let tools: Vec<Value> = request
+        .tools
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let function = entry.get("function")?;
+                    let name = function.get("name")?.clone();
+                    let input_schema = function.get("parameters")?.clone();
+                    let description = function
+                        .get("description")
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(String::new()));
+                    Some(json!({
+                        "name": name,
+                        "description": description,
+                        "input_schema": input_schema,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut body = json!({
+        "model": request.model,
+        "max_tokens": request.max_tokens,
+        "messages": messages,
+    });
+    if !system.is_empty() {
+        body["system"] = json!(system.join("\n\n"));
+    }
+    if !tools.is_empty() {
+        body["tools"] = Value::Array(tools);
+    }
+    body
+}
+
+fn flush_tool_results(messages: &mut Vec<Value>, tool_results: &mut Vec<Value>) {
+    if !tool_results.is_empty() {
+        let blocks = std::mem::take(tool_results);
+        messages.push(json!({ "role": "user", "content": blocks }));
+    }
+}
+
+/// Parse an Anthropic Messages response into our wire-neutral shape.
+/// `thinking` / `redacted_thinking` blocks are dropped: the relay accepts a
+/// history without them (probe-verified) and we do not keep signatures.
+fn parse_messages_response(value: &Value) -> Result<ChatResponse> {
+    let content = value
+        .get("content")
+        .and_then(Value::as_array)
+        .context("messages response has no content")?;
+    let mut text = String::new();
+    let mut tool_calls = Vec::new();
+    for block in content {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(part) = block.get("text").and_then(Value::as_str) {
+                    text.push_str(part);
+                }
+            }
+            Some("tool_use") => {
+                let id = block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let name = block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .context("tool_use block has no name")?
+                    .to_string();
+                let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
+                tool_calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments: input.to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+    let usage = value
+        .get("usage")
+        .map(parse_messages_usage)
+        .unwrap_or_default();
+    Ok(ChatResponse {
+        message: ChatMessage::assistant((!text.is_empty()).then_some(text), tool_calls),
+        usage,
+    })
+}
+
+/// Anthropic usage: `input_tokens` counts only non-cached input, so the
+/// wire-neutral `input_tokens` (total, incl. cached, matching the chat wire
+/// semantics that `estimate_cost` assumes) is the sum of the three buckets.
+fn parse_messages_usage(value: &Value) -> Usage {
+    let field = |name: &str| value.get(name).and_then(Value::as_u64).unwrap_or(0);
+    let cached = field("cache_read_input_tokens");
+    let creation = field("cache_creation_input_tokens");
+    Usage {
+        input_tokens: field("input_tokens") + cached + creation,
+        cached_input_tokens: cached,
+        output_tokens: field("output_tokens"),
+        reasoning_tokens: 0,
+        cost_usd: None,
     }
 }
 
@@ -462,6 +682,122 @@ mod tests {
         assert_eq!(
             response.message.tool_calls.as_ref().unwrap()[0].name,
             "read"
+        );
+    }
+
+    fn sample_request(messages: Vec<ChatMessage>) -> ChatRequest {
+        ChatRequest {
+            model: "mimo-v2.6-pro".into(),
+            messages,
+            tools: json!([{
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "description": "Run a shell command.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"]
+                    }
+                }
+            }]),
+            max_tokens: 512,
+            temperature: 0.0,
+        }
+    }
+
+    fn call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: "bash".to_string(),
+            arguments: r#"{"cmd":"pwd"}"#.to_string(),
+        }
+    }
+
+    #[test]
+    fn builds_messages_body_from_chat_history() {
+        let request = sample_request(vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("hello"),
+            ChatMessage::assistant(None, vec![call("call-1")]),
+            ChatMessage::tool("call-1", "bash", "exit=0"),
+        ]);
+        let body = build_messages_body(&request);
+        assert_eq!(body["system"], json!("sys"));
+        assert_eq!(body["max_tokens"], json!(512));
+        // No temperature: thinking models reject non-default values and the
+        // relay default is fine (probe-verified).
+        assert!(body.get("temperature").is_none());
+
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1]["role"], json!("assistant"));
+        assert_eq!(messages[1]["content"][0]["type"], json!("tool_use"));
+        assert_eq!(messages[1]["content"][0]["input"], json!({"cmd":"pwd"}));
+        assert_eq!(messages[2]["role"], json!("user"));
+        assert_eq!(messages[2]["content"][0]["type"], json!("tool_result"));
+        assert_eq!(messages[2]["content"][0]["tool_use_id"], json!("call-1"));
+
+        // OpenAI function tools convert to Anthropic input_schema.
+        assert_eq!(body["tools"][0]["name"], json!("bash"));
+        assert!(body["tools"][0].get("function").is_none());
+        assert_eq!(body["tools"][0]["input_schema"]["type"], json!("object"));
+    }
+
+    #[test]
+    fn batches_consecutive_tool_results_into_one_user_message() {
+        let request = sample_request(vec![
+            ChatMessage::user("go"),
+            ChatMessage::assistant(None, vec![call("call-1"), call("call-2")]),
+            ChatMessage::tool("call-1", "bash", "one"),
+            ChatMessage::tool("call-2", "bash", "two"),
+        ]);
+        let body = build_messages_body(&request);
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages.len(), 3, "system is hoisted out of messages");
+        let results = messages[2]["content"].as_array().expect("results");
+        assert_eq!(results.len(), 2, "parallel results batch into one message");
+        assert_eq!(results[1]["tool_use_id"], json!("call-2"));
+    }
+
+    #[test]
+    fn parses_messages_response_with_thinking_and_tools() {
+        let value = json!({
+            "content": [
+                {"type": "thinking", "text": null},
+                {"type": "text", "text": "running "},
+                {"type": "text", "text": "now"},
+                {"type": "tool_use", "id": "call-9", "name": "bash",
+                 "input": {"cmd": "ls"}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {
+                "input_tokens": 100,
+                "cache_read_input_tokens": 400,
+                "cache_creation_input_tokens": 20,
+                "output_tokens": 50
+            }
+        });
+        let response = parse_messages_response(&value).expect("parse");
+        assert_eq!(response.message.content.as_deref(), Some("running now"));
+        let calls = response.message.tool_calls.as_ref().expect("calls");
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(
+            serde_json::from_str::<Value>(&calls[0].arguments).expect("args"),
+            json!({"cmd": "ls"})
+        );
+        // Anthropic input_tokens excludes cache buckets; the wire-neutral
+        // total (what estimate_cost assumes) is their sum.
+        assert_eq!(response.usage.input_tokens, 520);
+        assert_eq!(response.usage.cached_input_tokens, 400);
+        assert_eq!(response.usage.output_tokens, 50);
+    }
+
+    #[test]
+    fn responses_wire_is_rejected_early() {
+        assert!(
+            OpenAiProvider::from_env_with_wire(loom_core::Wire::Responses).is_err(),
+            "responses wire must fail fast with a clear message"
         );
     }
 

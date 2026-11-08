@@ -31,7 +31,9 @@ if [ "$ONLY" = "both" ] || [ "$ONLY" = "gpt" ]; then
 fi
 
 DEEPSEEK_MODEL="${LOOM_LIVE_DEEPSEEK_MODEL:-deepseek-flash}"
+DEEPSEEK_WIRE="${LOOM_LIVE_DEEPSEEK_WIRE:-chat}"
 GPT_MODEL="${LOOM_LIVE_GPT_MODEL:-gpt-6.1-sol}"
+GPT_WIRE="${LOOM_LIVE_GPT_WIRE:-chat}"
 export LOOM_API_TIMEOUT_S="${LOOM_API_TIMEOUT_S:-60}"
 
 cargo build -q --manifest-path /work/src/Cargo.toml -p loom-cli -p loom-native
@@ -73,12 +75,14 @@ alias = "live-deepseek"
 tier = "worker"
 model_id = "$DEEPSEEK_MODEL"
 tool_calls = true
+wire = "$DEEPSEEK_WIRE"
 
 [[models]]
 alias = "live-gpt"
 tier = "frontier"
 model_id = "$GPT_MODEL"
 tool_calls = true
+wire = "$GPT_WIRE"
 EOF
 
 gen_task() {
@@ -167,10 +171,10 @@ run_live() {
 
 fail=0
 if [ "$ONLY" = "both" ] || [ "$ONLY" = "deepseek" ]; then
-    run_live 021 live-deepseek "$LOOM_DEEPSEEK_API_BASE" "$LOOM_DEEPSEEK_API_KEY" "deepseek-flash" || fail=1
+    run_live 021 live-deepseek "$LOOM_DEEPSEEK_API_BASE" "$LOOM_DEEPSEEK_API_KEY" "$DEEPSEEK_MODEL" || fail=1
 fi
 if [ "$ONLY" = "both" ] || [ "$ONLY" = "gpt" ]; then
-    run_live 022 live-gpt "$LOOM_GPT_API_BASE" "$LOOM_GPT_API_KEY" "gpt-6.1-sol" || fail=1
+    run_live 022 live-gpt "$LOOM_GPT_API_BASE" "$LOOM_GPT_API_KEY" "$GPT_MODEL" || fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then

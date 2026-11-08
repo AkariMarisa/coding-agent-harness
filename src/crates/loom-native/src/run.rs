@@ -159,7 +159,14 @@ pub fn run_from_env() -> Result<NativeOutcome> {
         let mut provider = ScriptedProvider::from_file(Path::new(&path))?;
         run(&request, &mut provider, None)
     } else {
-        let mut provider = OpenAiProvider::from_env()?;
+        // The wire comes from the model capability: some relay models need
+        // the Anthropic Messages shape for tool history.
+        let wire = request
+            .model_capability
+            .as_ref()
+            .map(|capability| capability.wire)
+            .unwrap_or_default();
+        let mut provider = OpenAiProvider::from_env_with_wire(wire)?;
         run(&request, &mut provider, None)
     }
 }
