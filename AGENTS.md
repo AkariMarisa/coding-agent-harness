@@ -142,7 +142,7 @@ make check
 3. native vs adapter A/B（同任务集，按 CPVT/TPVT/墙钟）；
 4. 用真实仓库校准 `tool_output_ratio` / `spill_rate` / 成本估算；
 5. 真实仓库的合并冲突率统计（3 并行 A/B 已用 `scripts/ab-parallel.sh` 实测：wall 13s→6s、tokens 仅 +5.8%、cache 48%→89%，见 `doc/08` §9.5）；
-6. 记录 CPVT/TPVT/WPT 基线。
+6. 记录 CPVT/TPVT/WPT 基线（首版已出：`scripts/ab-parallel.sh --report` 含 wall/TPVT/CPVT 三列，见 `doc/08` §9.5；价格表 `scripts/model-prices.sh`；待多轮/多模型扩充）。
 
 当前卡点详见 `doc/14-当前问题与卡点.md`。
 

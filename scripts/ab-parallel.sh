@@ -19,6 +19,8 @@ set -euo pipefail
 cd /work
 
 TOKEN_CAP="${LOOM_AB_MAX_TOKENS:-20000}"
+# Official price table: feeds [[models]] price fields and the CPVT column.
+. /work/scripts/model-prices.sh
 AB_MODEL="${LOOM_AB_MODEL:-deepseek-flash}"
 AB_WIRE="${LOOM_AB_WIRE:-chat}"
 AB_BASE="${LOOM_AB_BASE:-${LOOM_DEEPSEEK_API_BASE:-}}"
@@ -37,22 +39,48 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Offline cost from the tracked price table: works on already-recorded rows,
+# so prices live in one place (scripts/model-prices.sh).
+row_cost() {
+    local model="$1" input="$2" cached="$3" output="$4" pi pc po
+    pi=$(price_input "$model")
+    if [ -z "$pi" ]; then
+        echo "na"
+        return 0
+    fi
+    pc=$(price_cached "$model")
+    po=$(price_output "$model")
+    awk -v i="$input" -v c="$cached" -v o="$output" \
+        -v pi="$pi" -v pc="$pc" -v po="$po" \
+        'BEGIN {
+            u = i - c
+            if (u < 0) u = 0
+            printf "%.6f", (u * pi + c * pc + o * po) / 1000000
+        }'
+}
+
 if [ "$report" = 1 ]; then
     if [ ! -s "$RESULTS" ]; then
         echo "no A/B results yet; run with --arm first" >&2
         exit 2
     fi
-    printf '%-6s %-6s %-18s %-10s %-10s %-8s %-8s %-8s %-8s %-6s %-6s\n' \
-        arm tasks model wall_s max_task input cached output tokens cache% ok
+    printf '%-6s %-6s %-18s %-10s %-10s %-8s %-8s %-8s %-8s %-6s %-6s %-10s %-10s\n' \
+        arm tasks model wall_s max_task input cached output tokens cache% ok cost_usd cpvt
     sort -t$'\t' -k2,2n -k1,1 "$RESULTS" | while IFS=$'\t' \
         read -r ts a t model wall wallmax input cached output tokens ok; do
         cache_pct=0
         if [ "$input" -gt 0 ]; then
             cache_pct=$((cached * 100 / input))
         fi
-        printf '%-6s %-6s %-18s %-10s %-10s %-8s %-8s %-8s %-8s %-6s %-6s\n' \
+        cost=$(row_cost "$model" "$input" "$cached" "$output")
+        cpvt=na
+        if [ "$cost" != "na" ]; then
+            cpvt=$(awk -v c="$cost" -v n="$t" \
+                'BEGIN { printf "%.6f", c / n }')
+        fi
+        printf '%-6s %-6s %-18s %-10s %-10s %-8s %-8s %-8s %-8s %-6s %-6s %-10s %-10s\n' \
             "$a" "$t" "$model" "$wall" "$wallmax" "$input" "$cached" \
-            "$output" "$tokens" "${cache_pct}%" "$ok"
+            "$output" "$tokens" "${cache_pct}%" "$ok" "$cost" "$cpvt"
     done
     exit 0
 fi
@@ -99,6 +127,10 @@ tool_calls = true
 wire = "$AB_WIRE"
 base_url = "$AB_BASE"
 key_env = "$AB_KEY_ENV"
+EOF
+# Prices must land inside [[models]], before the [parallel] table.
+price_toml "$AB_MODEL" >> /work/.smoke-ab/.loom/config.toml
+cat >> /work/.smoke-ab/.loom/config.toml <<EOF
 
 [parallel]
 max_running = $arm

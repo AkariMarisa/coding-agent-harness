@@ -99,6 +99,7 @@ export LOOM_NATIVE_DEBUG=1
 # base_url + key_env exercise the per-model endpoint switch: each alias
 # carries its own relay, so one dispatch can cross providers. Only models
 # whose relay base is configured get an entry (LOOM_LIVE_ONLY may skip one).
+. /work/scripts/model-prices.sh
 : > /work/.smoke-live/.loom/config.toml
 if [ -n "$DEEPSEEK_BASE" ]; then
     cat >> /work/.smoke-live/.loom/config.toml <<EOF
@@ -111,6 +112,7 @@ wire = "$DEEPSEEK_WIRE"
 base_url = "$DEEPSEEK_BASE"
 key_env = "LOOM_DEEPSEEK_API_KEY"
 EOF
+    price_toml "$DEEPSEEK_MODEL" >> /work/.smoke-live/.loom/config.toml
 fi
 if [ -n "$GPT_BASE" ]; then
     cat >> /work/.smoke-live/.loom/config.toml <<EOF
@@ -123,6 +125,7 @@ wire = "$GPT_WIRE"
 base_url = "$GPT_BASE"
 key_env = "LOOM_GPT_API_KEY"
 EOF
+    price_toml "$GPT_MODEL" >> /work/.smoke-live/.loom/config.toml
 fi
 
 gen_task() {
