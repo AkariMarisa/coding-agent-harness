@@ -61,6 +61,7 @@ pub enum TaskStatus {
     Passed,
     Failed,
     Blocked,
+    NeedsInput,
     Escalated,
     Merged,
     Cancelled,
@@ -77,6 +78,7 @@ impl TaskStatus {
             Self::Passed => "passed",
             Self::Failed => "failed",
             Self::Blocked => "blocked",
+            Self::NeedsInput => "needs_input",
             Self::Escalated => "escalated",
             Self::Merged => "merged",
             Self::Cancelled => "cancelled",
@@ -103,6 +105,7 @@ impl TaskStatus {
                 | Self::Running
                 | Self::Receipt
                 | Self::Blocked
+                | Self::NeedsInput
                 | Self::Escalated
         )
     }
@@ -121,6 +124,7 @@ impl FromStr for TaskStatus {
             "passed" => Ok(Self::Passed),
             "failed" => Ok(Self::Failed),
             "blocked" => Ok(Self::Blocked),
+            "needs_input" | "needs-input" => Ok(Self::NeedsInput),
             "escalated" => Ok(Self::Escalated),
             "merged" => Ok(Self::Merged),
             "cancelled" | "canceled" => Ok(Self::Cancelled),
@@ -140,6 +144,7 @@ pub fn status_after_event(current: TaskStatus, event: EventType) -> TaskStatus {
         EventType::TaskPassed => TaskStatus::Passed,
         EventType::TaskFailed => TaskStatus::Failed,
         EventType::TaskBlocked => TaskStatus::Blocked,
+        EventType::TaskNeedsInput => TaskStatus::NeedsInput,
         EventType::TaskEscalated => TaskStatus::Escalated,
         EventType::TaskMerged => TaskStatus::Merged,
         EventType::HumanAborted => TaskStatus::Cancelled,
@@ -861,6 +866,23 @@ mod tests {
             assert_eq!(status, expected);
         }
         assert!(status.satisfies_dependency());
+    }
+
+    #[test]
+    fn needs_input_is_not_a_failure() {
+        // doc/15 §2.1: an agent asking a question must not be counted as a
+        // failed attempt (which used to trigger tier escalation).
+        let status = status_after_event(TaskStatus::Receipt, EventType::TaskNeedsInput);
+        assert_eq!(status, TaskStatus::NeedsInput);
+        assert!(status.is_open(), "needs_input can be re-dispatched");
+        assert!(!status.is_terminal());
+        assert!(!status.satisfies_dependency());
+        assert_eq!(status.as_str(), "needs_input");
+        assert_eq!("needs_input".parse::<TaskStatus>().unwrap(), status);
+        assert_eq!(
+            status_after_event(TaskStatus::Receipt, EventType::TaskBlocked),
+            TaskStatus::Blocked
+        );
     }
 
     #[test]

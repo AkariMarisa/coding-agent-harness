@@ -99,6 +99,36 @@
       "minimum": 100,
       "maximum": 599,
       "description": "HTTP/provider 状态；>= 400 计为失败请求。"
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "run 内 1-based 步号；一次性请求可省略。"
+    },
+    "tool_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "本步模型调用的工具名。"
+    },
+    "write_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "本步整文件写入的路径（edit 不算）。"
+    },
+    "rewrite_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "本步对已写文件的重复整文件覆盖次数。"
+    },
+    "history_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "投影前的序列化历史字节数。"
+    },
+    "projected_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "投影后实际发送的字节数。"
     }
   },
   "allOf": [

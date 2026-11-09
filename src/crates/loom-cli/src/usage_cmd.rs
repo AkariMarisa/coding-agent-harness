@@ -63,6 +63,14 @@ pub fn ingest(
             .or_else(|| number_field(&row, &["latency_s"]).map(|secs| (secs * 1000.0) as u64));
         record.status =
             u64_field(&row, &["status", "http_status", "status_code"]).map(|value| value as u16);
+        // Step-level churn attribution (`doc/16` §8.4); optional for
+        // one-shot rows and third-party JSONL.
+        record.step = u64_field(&row, &["step"]).map(|value| value as u32);
+        record.tool_names = string_list(&row, "tool_names");
+        record.write_paths = string_list(&row, "write_paths");
+        record.rewrite_count = u64_field(&row, &["rewrite_count"]).map(|value| value as u32);
+        record.history_bytes = u64_field(&row, &["history_bytes"]);
+        record.projected_bytes = u64_field(&row, &["projected_bytes"]);
 
         let source = string_field(&row, &["source"])
             .as_deref()
@@ -176,6 +184,16 @@ fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
             .map(ToOwned::to_owned)
             .filter(|text| !text.trim().is_empty())
     })
+}
+
+fn string_list(value: &Value, key: &str) -> Option<Vec<String>> {
+    let items = value.get(key)?.as_array()?;
+    let list: Vec<String> = items
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    (!list.is_empty()).then_some(list)
 }
 
 fn number_field(value: &Value, keys: &[&str]) -> Option<f64> {

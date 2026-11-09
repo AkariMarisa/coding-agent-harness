@@ -16,6 +16,7 @@ loom-context = { path = "../loom-context" }
 loom-core = { path = "../loom-core" }
 loom-store = { path = "../loom-store" }
 loom-tools = { path = "../loom-tools" }
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 

@@ -26,6 +26,7 @@
         "task.fallback",
         "task.merged",
         "task.blocked",
+        "task.needs_input",
         "budget.warning",
         "budget.exceeded",
         "human.approved",

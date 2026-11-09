@@ -58,6 +58,7 @@ pub(crate) fn prepare(
         TaskStatus::Pending
             | TaskStatus::Ready
             | TaskStatus::Blocked
+            | TaskStatus::NeedsInput
             | TaskStatus::Failed
             | TaskStatus::Escalated
     ) {

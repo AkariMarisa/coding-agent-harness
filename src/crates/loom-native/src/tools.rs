@@ -3,6 +3,7 @@
 //! Every result is projected to a short observation. Output that exceeds the
 //! observation budget is written to an artifact and referenced by path.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,9 @@ const MAX_READ_LINES: usize = 400;
 const MAX_READ_BYTES: usize = 48 * 1024;
 const MAX_SEARCH_RESULTS: usize = 80;
 const MAX_BASH_BYTES: usize = 64 * 1024;
+/// Single-file `write` cap. Larger contents must come through `edit`/patches;
+/// 64KB still fits the biggest files real tasks have needed so far.
+const MAX_WRITE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -33,6 +37,25 @@ pub struct ToolBox {
     spec: TaskSpec,
     artifact_dir: PathBuf,
     step: u32,
+    /// Files read in this run; currently informational (doc/16 §8.3 keeps
+    /// `mode` as the hard gate and this as a hint source).
+    reads: HashSet<String>,
+    /// Full-file writes per path (create + replace), used for the rewrite hint
+    /// and for step-level churn attribution.
+    write_counts: HashMap<String, u32>,
+    /// Ordered full-file write events. Churn accounting needs the step and the
+    /// payload size, which `write_counts` alone cannot answer.
+    write_log: Vec<WriteEvent>,
+}
+
+/// One full-file `write` that actually landed on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteEvent {
+    pub path: String,
+    pub bytes: usize,
+    /// 1-based occurrence of this path in the run; >1 means a rewrite.
+    pub count: u32,
+    pub step: u32,
 }
 
 impl ToolBox {
@@ -42,14 +65,22 @@ impl ToolBox {
             spec,
             artifact_dir: artifact_dir.into(),
             step: 0,
+            reads: HashSet::new(),
+            write_counts: HashMap::new(),
+            write_log: Vec::new(),
         }
+    }
+
+    /// Every full-file write that landed, in order.
+    pub fn write_log(&self) -> &[WriteEvent] {
+        &self.write_log
     }
 
     pub fn set_step(&mut self, step: u32) {
         self.step = step;
     }
 
-    pub fn execute(&self, name: &str, arguments: &str) -> Result<ToolResult> {
+    pub fn execute(&mut self, name: &str, arguments: &str) -> Result<ToolResult> {
         let args: Value = if arguments.trim().is_empty() {
             Value::Object(Default::default())
         } else {
@@ -66,13 +97,14 @@ impl ToolBox {
         }
     }
 
-    fn read(&self, args: &Value) -> Result<ToolResult> {
+    fn read(&mut self, args: &Value) -> Result<ToolResult> {
         let path = string_arg(args, "path")?;
         let resolved = self.resolve(&path)?;
         if !resolved.is_file() {
             bail!("not a file: {path}");
         }
         let bytes = fs::read(&resolved).with_context(|| format!("read {path}"))?;
+        self.reads.insert(self.relative_of(&path)?);
         let text = String::from_utf8_lossy(&bytes);
         let lines: Vec<&str> = text.lines().collect();
         let total = lines.len();
@@ -194,7 +226,7 @@ impl ToolBox {
         })
     }
 
-    fn edit(&self, args: &Value) -> Result<ToolResult> {
+    fn edit(&mut self, args: &Value) -> Result<ToolResult> {
         let path = string_arg(args, "path")?;
         self.ensure_editable(&path)?;
         let old = string_arg(args, "old")?;
@@ -210,7 +242,12 @@ impl ToolBox {
         let text = fs::read_to_string(&resolved).with_context(|| format!("read {path}"))?;
         let count = text.matches(&old).count();
         if count == 0 {
-            bail!("old text not found in {path}");
+            // Point back at the precise text instead of nudging a full rewrite
+            // (doc/16 §8.3: edit failure is where churn starts).
+            bail!(
+                "old text not found in {path}; read {path} (with a 1-based range around the target) \
+                 and copy the exact current text — do not rewrite the whole file"
+            );
         }
         if count > 1 && !replace_all {
             bail!("old text appears {count} times in {path}; pass replace_all=true or add context");
@@ -227,17 +264,55 @@ impl ToolBox {
         })
     }
 
-    fn write(&self, args: &Value) -> Result<ToolResult> {
+    fn write(&mut self, args: &Value) -> Result<ToolResult> {
         let path = string_arg(args, "path")?;
         self.ensure_editable(&path)?;
         let content = string_arg(args, "content")?;
+        let mode = args.get("mode").and_then(Value::as_str).unwrap_or("create");
+        if !matches!(mode, "create" | "replace") {
+            bail!("mode must be \"create\" or \"replace\", got {mode}");
+        }
+        if content.len() > MAX_WRITE_BYTES {
+            bail!(
+                "content is {} bytes; write is capped at {MAX_WRITE_BYTES} bytes — \
+                 split the file or apply the change with edit (old/new)",
+                content.len()
+            );
+        }
         let resolved = self.resolve(&path)?;
+        let existed = resolved.is_file();
+        if existed && mode != "replace" {
+            bail!(
+                "{path} already exists; use edit (old/new) for a change, or pass \
+                 mode=\"replace\" to rewrite the whole file"
+            );
+        }
         if let Some(parent) = resolved.parent() {
             fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
         fs::write(&resolved, content.as_bytes()).with_context(|| format!("write {path}"))?;
+        let key = self.relative_of(&path)?;
+        let count = {
+            let count = self.write_counts.entry(key.clone()).or_insert(0);
+            *count += 1;
+            *count
+        };
+        self.write_log.push(WriteEvent {
+            path: key,
+            bytes: content.len(),
+            count,
+            step: self.step,
+        });
+        let rewrite_note = if count > 1 {
+            format!("; full rewrite #{count} of this file — prefer edit for incremental changes")
+        } else {
+            String::new()
+        };
         Ok(ToolResult {
-            observation: format!("wrote {path} ({} bytes)", content.len()),
+            observation: format!(
+                "wrote {path} ({} bytes, mode={mode}{rewrite_note})",
+                content.len()
+            ),
             mutated: true,
         })
     }
@@ -322,7 +397,7 @@ impl ToolBox {
     }
 
     fn ensure_editable(&self, path: &str) -> Result<()> {
-        let relative = normalize(path)?;
+        let relative = self.relative_of(path)?;
         if !self.spec.workspace.allows(&relative) {
             bail!(
                 "path {path} is outside the task's allowed_paths {}",
@@ -333,16 +408,19 @@ impl ToolBox {
     }
 
     fn resolve(&self, path: &str) -> Result<PathBuf> {
+        Ok(self.root.join(self.relative_of(path)?))
+    }
+
+    /// Normalize a tool path to a workspace-relative key. Models often echo
+    /// absolute paths from the bash commands they just saw; accept them when
+    /// they point inside the workspace, keep rejecting anything outside it.
+    fn relative_of(&self, path: &str) -> Result<String> {
         let path = path.trim();
-        // Models often echo absolute paths from the bash commands they just
-        // saw; accept them when they point inside the workspace, keep
-        // rejecting anything outside it.
         let root = self.root.to_string_lossy();
-        let relative = match path.strip_prefix(root.as_ref()) {
-            Some(rest) => normalize(rest.trim_start_matches('/'))?,
-            None => normalize(path)?,
-        };
-        Ok(self.root.join(relative))
+        match path.strip_prefix(root.as_ref()) {
+            Some(rest) => normalize(rest.trim_start_matches('/')),
+            None => normalize(path),
+        }
     }
 
     fn artifact_path(&self, name: &str) -> PathBuf {
@@ -405,7 +483,7 @@ mod tests {
     #[test]
     fn writes_reads_edits_and_rejects_escape() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let tools = toolbox(dir.path());
+        let mut tools = toolbox(dir.path());
         tools
             .execute(
                 "write",
@@ -455,7 +533,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(dir.path().join("src")).expect("mkdir");
         fs::write(dir.path().join("src/a.rs"), "fn refresh() {}\n").expect("write");
-        let tools = toolbox(dir.path());
+        let mut tools = toolbox(dir.path());
         let result = tools
             .execute(
                 "search",
@@ -468,7 +546,7 @@ mod tests {
     #[test]
     fn read_accepts_absolute_path_inside_workspace() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let tools = toolbox(dir.path());
+        let mut tools = toolbox(dir.path());
         tools
             .execute("write", r#"{"path":"src/a.txt","content":"hello"}"#)
             .expect("write");
@@ -484,9 +562,123 @@ mod tests {
     }
 
     #[test]
+    fn write_requires_replace_mode_for_existing_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut tools = toolbox(dir.path());
+        tools
+            .execute(
+                "write",
+                &json!({"path": "src/a.txt", "content": "one"}).to_string(),
+            )
+            .expect("create");
+
+        let error = tools
+            .execute(
+                "write",
+                &json!({"path": "src/a.txt", "content": "two"}).to_string(),
+            )
+            .expect_err("overwrite without mode must be rejected");
+        let message = format!("{error:#}");
+        assert!(message.contains("mode=\"replace\""), "{message}");
+        assert!(message.contains("edit"), "{message}");
+        // The rejected write must not touch the file.
+        let read = tools
+            .execute("read", &json!({"path": "src/a.txt"}).to_string())
+            .expect("read");
+        assert!(read.observation.contains("one"));
+
+        let replaced = tools
+            .execute(
+                "write",
+                &json!({"path": "src/a.txt", "content": "two", "mode": "replace"}).to_string(),
+            )
+            .expect("replace");
+        assert!(replaced.observation.contains("mode=replace"));
+    }
+
+    #[test]
+    fn repeated_rewrites_are_reported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut tools = toolbox(dir.path());
+        for content in ["one", "two", "three"] {
+            tools
+                .execute(
+                    "write",
+                    &json!({"path": "src/a.txt", "content": content, "mode": "replace"})
+                        .to_string(),
+                )
+                .expect("replace");
+        }
+        let counts: Vec<u32> = tools
+            .write_log()
+            .iter()
+            .filter(|event| event.path == "src/a.txt")
+            .map(|event| event.count)
+            .collect();
+        assert_eq!(counts, vec![1, 2, 3]);
+        let last = tools
+            .execute(
+                "write",
+                &json!({"path": "src/a.txt", "content": "four", "mode": "replace"}).to_string(),
+            )
+            .expect("replace");
+        assert!(
+            last.observation.contains("full rewrite #4"),
+            "{}",
+            last.observation
+        );
+    }
+
+    #[test]
+    fn write_rejects_unknown_mode_and_oversized_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut tools = toolbox(dir.path());
+        let error = tools
+            .execute(
+                "write",
+                &json!({"path": "src/a.txt", "content": "x", "mode": "append"}).to_string(),
+            )
+            .expect_err("unknown mode");
+        assert!(format!("{error:#}").contains("mode must be"));
+
+        let huge = "x".repeat(MAX_WRITE_BYTES + 1);
+        let error = tools
+            .execute(
+                "write",
+                &json!({"path": "src/b.txt", "content": huge}).to_string(),
+            )
+            .expect_err("oversized");
+        assert!(format!("{error:#}").contains("capped at"));
+    }
+
+    #[test]
+    fn edit_miss_points_back_to_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut tools = toolbox(dir.path());
+        tools
+            .execute(
+                "write",
+                &json!({"path": "src/a.txt", "content": "hello"}).to_string(),
+            )
+            .expect("create");
+        let error = tools
+            .execute(
+                "edit",
+                &json!({"path": "src/a.txt", "old": "nope", "new": "x"}).to_string(),
+            )
+            .expect_err("miss");
+        let message = format!("{error:#}");
+        assert!(message.contains("read src/a.txt"), "{message}");
+        assert!(
+            message.contains("do not rewrite the whole file"),
+            "{message}"
+        );
+    }
+
+    #[test]
     fn bash_accepts_command_alias() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let tools = toolbox(dir.path());
+        let mut tools = toolbox(dir.path());
         let result = tools
             .execute("bash", r#"{"command": "echo alias-ok"}"#)
             .expect("run");
@@ -501,7 +693,7 @@ mod tests {
             .current_dir(dir.path())
             .output()
             .expect("git init");
-        let tools = toolbox(dir.path());
+        let mut tools = toolbox(dir.path());
         let result = tools
             .execute(
                 "bash",

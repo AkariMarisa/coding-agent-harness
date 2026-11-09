@@ -15,6 +15,7 @@ use anyhow::{bail, Context as _, Result};
 use loom_core::{truncate_bytes, ModelCapability, TaskSpec};
 use serde_json::{json, Value};
 
+use crate::churn::{self, ChurnInput, PriceHint, StepChurn};
 use crate::provider::{
     ChatMessage, ChatRequest, ChatResponse, OpenAiProvider, Provider, ScriptedProvider, ToolCall,
     Usage,
@@ -240,8 +241,16 @@ pub fn run(
     let mut verify_rounds = 0u32;
     let mut verify = skip_verify(&spec);
     let mut finished: Option<Finish> = None;
+    // Attribution rows, written to usage.jsonl and logs/churn.json (`doc/16`
+    // §8.4). A step is flushed at the top of the next iteration (or after the
+    // loop) so the tool calls that answered it are already known.
+    let mut step_rows: Vec<StepChurn> = Vec::new();
+    let mut pending: Option<PendingStep> = None;
 
     while steps < config.max_steps {
+        if let Some(step) = pending.take() {
+            record_step(request, step, &mut step_rows)?;
+        }
         if let Some(reason) = budget_reason(&config, &usage, started.elapsed()) {
             finished = Some(Finish::budget(&reason));
             break;
@@ -253,7 +262,7 @@ pub fn run(
         // Step-level projection: the stable prefix (system + packet) and the
         // most recent turns ship verbatim; old tool payloads ship as bounded
         // summaries so they stop compounding on every request (doc/15 §1.3A).
-        let send_messages = crate::project::project_messages(
+        let (send_messages, projection) = crate::project::project_messages_with_stats(
             &messages,
             config.keep_recent_turns,
             config.max_history_bytes,
@@ -279,7 +288,20 @@ pub fn run(
         let mut call_usage = response.usage.clone();
         let cost_source = apply_estimated_cost(request, &mut call_usage);
         usage.add(&call_usage);
-        append_usage(request, &call_usage, cost_source, latency_ms)?;
+        pending = Some(PendingStep {
+            usage: call_usage.clone(),
+            cost_source: cost_source.to_string(),
+            latency_ms,
+            row: StepChurn {
+                step: steps,
+                history_bytes: projection.full_bytes as u64,
+                projected_bytes: projection.sent_bytes as u64,
+                input_tokens: call_usage.input_tokens,
+                cached_input_tokens: call_usage.cached_input_tokens,
+                output_tokens: call_usage.output_tokens,
+                ..StepChurn::default()
+            },
+        });
 
         let ChatResponse { message, .. } = response;
         let calls = message.tool_calls.clone().unwrap_or_default();
@@ -316,10 +338,14 @@ pub fn run(
         messages.push(message);
         let mut mutated = false;
         let mut finish_call: Option<ToolCall> = None;
+        let write_mark = toolbox.write_log().len();
         for call in &calls {
             if call.name == "finish" {
                 finish_call = Some(call.clone());
                 continue;
+            }
+            if let Some(step) = pending.as_mut() {
+                step.row.tool_names.push(call.name.clone());
             }
             let observation = match toolbox.execute(&call.name, &call.arguments) {
                 Ok(result) => {
@@ -333,6 +359,18 @@ pub fn run(
                 call.name.clone(),
                 observation,
             ));
+        }
+        // Files written by this step, plus whether any of them was a rewrite
+        // of a file already written earlier in the run.
+        if let Some(step) = pending.as_mut() {
+            for event in &toolbox.write_log()[write_mark..] {
+                if !step.row.write_paths.contains(&event.path) {
+                    step.row.write_paths.push(event.path.clone());
+                }
+                if event.count > 1 {
+                    step.row.rewrite_count += 1;
+                }
+            }
         }
 
         if let Some(call) = finish_call {
@@ -398,6 +436,11 @@ pub fn run(
     if started.elapsed().as_secs() >= config.max_wall_s {
         finish = Finish::budget("wall-clock budget exceeded");
     }
+
+    if let Some(step) = pending.take() {
+        record_step(request, step, &mut step_rows)?;
+    }
+    write_churn(request, &usage, &step_rows, toolbox.write_log(), steps)?;
 
     let status = finish.status.as_str();
     let exit_code = match status {
@@ -547,6 +590,7 @@ fn default_system(spec: &TaskSpec) -> String {
     format!(
         "You are a Loom worker implementing one bounded task ({}).\n\
          Use the tools to inspect and edit the worktree. Keep changes inside allowed_paths: {}.\n\
+         Prefer edit (old/new) for changes to existing files; use write mode=replace only when a full rewrite is genuinely needed.\n\
          Run focused checks, then call finish with status done and a short summary.\n\
          Do not modify .loom or files outside the task workspace.",
         spec.task_id,
@@ -608,12 +652,13 @@ fn tool_schema() -> Value {
             "type": "function",
             "function": {
                 "name": "write",
-                "description": "Create or overwrite a file inside allowed_paths.",
+                "description": "Create a new file (mode=create, default) or rewrite an existing file (mode=replace). Prefer edit for changes to existing files; a full rewrite is the most expensive way to edit.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string"},
-                        "content": {"type": "string"}
+                        "content": {"type": "string"},
+                        "mode": {"type": "string", "enum": ["create", "replace"], "description": "create (default) only creates; replace is required to overwrite an existing file"}
                     },
                     "required": ["path", "content"]
                 }
@@ -735,17 +780,44 @@ fn failure_packet(
     out
 }
 
+struct PendingStep {
+    usage: Usage,
+    cost_source: String,
+    latency_ms: u64,
+    row: StepChurn,
+}
+
+fn record_step(
+    request: &NativeRequest,
+    step: PendingStep,
+    step_rows: &mut Vec<StepChurn>,
+) -> Result<()> {
+    append_usage(
+        request,
+        &step.usage,
+        &step.cost_source,
+        step.latency_ms,
+        &step.row,
+    )?;
+    step_rows.push(step.row);
+    Ok(())
+}
+
 fn append_usage(
     request: &NativeRequest,
     usage: &Usage,
     cost_source: &str,
     latency_ms: u64,
+    step: &StepChurn,
 ) -> Result<()> {
     let mut row = json!({
         "v": 1,
         "run_id": request.run_id,
         "task_id": request.task_id,
-        "model": request.model_id,
+        // `model` is the configured alias; `model_id` is the provider id. The
+        // ledger needs both for routing reconciliation.
+        "model": request.model,
+        "model_id": request.model_id,
         "input_tokens": usage.input_tokens,
         "cached_input_tokens": usage.cached_input_tokens,
         "output_tokens": usage.output_tokens,
@@ -754,6 +826,12 @@ fn append_usage(
         "latency_ms": latency_ms,
         "status": 200,
         "source": "runtime",
+        "step": step.step,
+        "tool_names": step.tool_names,
+        "write_paths": step.write_paths,
+        "rewrite_count": step.rewrite_count,
+        "history_bytes": step.history_bytes,
+        "projected_bytes": step.projected_bytes,
     });
     if let Some(cost) = usage.cost_usd {
         row["cost_usd"] = json!(cost);
@@ -765,6 +843,39 @@ fn append_usage(
         .open(&path)
         .with_context(|| format!("open {}", path.display()))?;
     writeln!(file, "{}", serde_json::to_string(&row)?)?;
+    Ok(())
+}
+
+/// Persist the per-run churn report next to the rest of the run logs.
+/// `loom churn stats` aggregates these; the ledger stays the billing truth.
+fn write_churn(
+    request: &NativeRequest,
+    usage: &Usage,
+    step_rows: &[StepChurn],
+    write_log: &[crate::tools::WriteEvent],
+    steps: u32,
+) -> Result<()> {
+    let capability = request.model_capability.as_ref();
+    let mut report = churn::build(ChurnInput {
+        run_id: &request.run_id,
+        task_id: &request.task_id,
+        attempt: request.attempt,
+        model_alias: &request.model,
+        model_id: &request.model_id,
+        steps,
+        step_rows,
+        write_log,
+        prices: PriceHint {
+            input_usd_per_mtok: capability.and_then(|cap| cap.input_usd_per_mtok),
+            cached_input_usd_per_mtok: capability.and_then(|cap| cap.cached_input_usd_per_mtok),
+            cache_write_usd_per_mtok: capability.and_then(|cap| cap.cache_write_usd_per_mtok),
+            output_usd_per_mtok: capability.and_then(|cap| cap.output_usd_per_mtok),
+        },
+    });
+    report.cost_usd = usage.cost_usd;
+    let path = request.logs_dir.join("churn.json");
+    fs::write(&path, serde_json::to_string_pretty(&report)?)
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
@@ -1095,6 +1206,75 @@ mod tests {
         assert_eq!(row["v"], 1);
         assert!(row.get("cost_usd").is_none(), "absent cost must be omitted");
         assert_eq!(row["cost_source"], "unknown");
+        // Step attribution must be schema-shaped and complete (`doc/16` §8.4).
+        assert_eq!(row["step"], 1);
+        assert_eq!(row["model"], "worker", "alias, not provider id");
+        assert_eq!(row["model_id"], "test-model");
+        assert_eq!(row["tool_names"], json!(["write"]));
+        assert_eq!(row["write_paths"], json!(["src/out.txt"]));
+        assert_eq!(row["rewrite_count"], 0);
+        assert!(row["history_bytes"].as_u64().unwrap() >= row["projected_bytes"].as_u64().unwrap());
+
+        let churn: Value = serde_json::from_str(
+            &fs::read_to_string(request.logs_dir.join("churn.json")).expect("churn"),
+        )
+        .expect("parse churn");
+        assert_eq!(churn["v"], 1);
+        assert_eq!(churn["estimated"], true);
+        assert_eq!(churn["steps"], 2);
+        assert_eq!(churn["write_passes"], 1);
+        assert_eq!(churn["rewrite_passes"], 0);
+        assert_eq!(churn["model_alias"], "worker");
+        assert_eq!(churn["model_id"], "test-model");
+    }
+
+    #[test]
+    fn repeated_writes_land_in_the_churn_report() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let script = json!([
+            {
+                "tool_calls": [{
+                    "name": "write",
+                    "arguments": {"path": "src/out.txt", "content": "one\n"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            },
+            {
+                "tool_calls": [{
+                    "name": "write",
+                    "arguments": {"path": "src/out.txt", "content": "two\n", "mode": "replace"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            },
+            {
+                "tool_calls": [{
+                    "name": "finish",
+                    "arguments": {"status": "done", "summary": "rewrote out.txt"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }
+        ]);
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, None).expect("run");
+        assert_eq!(outcome.status, "done", "{outcome:?}");
+
+        let usage = fs::read_to_string(request.output_dir.join("usage.jsonl")).expect("usage");
+        let second: Value =
+            serde_json::from_str(usage.lines().nth(1).expect("second row")).expect("parse");
+        assert_eq!(second["step"], 2);
+        assert_eq!(second["write_paths"], json!(["src/out.txt"]));
+        assert_eq!(second["rewrite_count"], 1);
+
+        let churn: Value = serde_json::from_str(
+            &fs::read_to_string(request.logs_dir.join("churn.json")).expect("churn"),
+        )
+        .expect("parse churn");
+        assert_eq!(churn["write_passes"], 2);
+        assert_eq!(churn["rewrite_passes"], 1);
+        assert!(churn["rewrite_output_tokens"].as_u64().unwrap() > 0);
+        assert!(churn["history_carry_tokens"].as_u64().unwrap() > 0);
+        assert_eq!(churn["write_paths"], json!(["src/out.txt"]));
     }
 
     #[test]

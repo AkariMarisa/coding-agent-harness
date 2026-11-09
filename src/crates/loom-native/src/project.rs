@@ -28,26 +28,58 @@ const ARG_KEEP_BYTES: usize = 512;
 const RESULT_KEEP_CHARS: usize = 600;
 const ELIDED: &str = "[elided";
 
-/// Project a run's message history for sending. Returns the input unchanged
-/// (cloned) when the dynamic tail is under `max_history_bytes` or when the
-/// projection would save fewer than `min_clear_tokens` tokens.
+/// How much of the history a request actually carried. `full_*` is what an
+/// unprojected replay would have sent; `sent_*` is what went on the wire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ProjectionStats {
+    pub full_bytes: usize,
+    pub sent_bytes: usize,
+    pub full_tokens_est: u64,
+    pub sent_tokens_est: u64,
+    /// True when at least one message was rewritten for this request.
+    pub projected: bool,
+}
+
+/// Project a run's message history for sending, plus the byte/token accounting
+/// needed for step-level churn attribution (`doc/16` §8.4).
 ///
-/// `max_history_bytes == 0` disables projection entirely.
-pub(crate) fn project_messages(
+/// The estimates use the serialized message JSON, so they stay deterministic and
+/// comparable between the projected and unprojected request.
+///
+/// Returns the input unchanged (cloned) when the dynamic tail is under
+/// `max_history_bytes` or when the projection would save fewer than
+/// `min_clear_tokens` tokens. `max_history_bytes == 0` disables projection.
+pub(crate) fn project_messages_with_stats(
     messages: &[ChatMessage],
     keep_recent_turns: usize,
     max_history_bytes: usize,
     min_clear_tokens: usize,
-) -> Vec<ChatMessage> {
+) -> (Vec<ChatMessage>, ProjectionStats) {
+    let full = serialized(messages);
+    let full_bytes = full.len();
+    let full_tokens_est = estimate_tokens(&full) as u64;
+    let unchanged = |projected: bool| {
+        (
+            messages.to_vec(),
+            ProjectionStats {
+                full_bytes,
+                sent_bytes: full_bytes,
+                full_tokens_est,
+                sent_tokens_est: full_tokens_est,
+                projected,
+            },
+        )
+    };
+
     if max_history_bytes == 0 || messages.len() <= 3 {
-        return messages.to_vec();
+        return unchanged(false);
     }
 
     // The dynamic tail excludes the stable prefix (system + packet user).
     let dynamic = &messages[2..];
-    let dynamic_bytes = serde_json::to_string(dynamic).map(|s| s.len()).unwrap_or(0);
+    let dynamic_bytes = serialized(dynamic).len();
     if dynamic_bytes <= max_history_bytes {
-        return messages.to_vec();
+        return unchanged(false);
     }
 
     // Keep the last K assistant turns that carried tool calls (plus
@@ -59,7 +91,7 @@ pub(crate) fn project_messages(
         .map(|(index, _)| index)
         .collect();
     if call_positions.len() <= keep_recent_turns.max(1) {
-        return messages.to_vec();
+        return unchanged(false);
     }
     let tail_start = call_positions[call_positions.len() - keep_recent_turns.max(1)];
 
@@ -78,16 +110,26 @@ pub(crate) fn project_messages(
     }
 
     // Only ship the projection when it actually pays for itself.
-    let full_tokens = serde_json::to_string(&messages)
-        .map(|s| estimate_tokens(&s))
-        .unwrap_or(0);
-    let new_tokens = serde_json::to_string(&projected)
-        .map(|s| estimate_tokens(&s))
-        .unwrap_or(full_tokens);
-    if full_tokens.saturating_sub(new_tokens) < min_clear_tokens {
-        return messages.to_vec();
+    let sent = serialized(&projected);
+    let sent_bytes = sent.len();
+    let sent_tokens_est = estimate_tokens(&sent) as u64;
+    if full_tokens_est.saturating_sub(sent_tokens_est) < min_clear_tokens as u64 {
+        return unchanged(false);
     }
-    projected
+    (
+        projected,
+        ProjectionStats {
+            full_bytes,
+            sent_bytes,
+            full_tokens_est,
+            sent_tokens_est,
+            projected: true,
+        },
+    )
+}
+
+fn serialized(messages: &[ChatMessage]) -> String {
+    serde_json::to_string(messages).unwrap_or_default()
 }
 
 /// Replace oversized payloads inside a history assistant message: long
@@ -213,14 +255,14 @@ mod tests {
     #[test]
     fn under_threshold_returns_history_untouched() {
         let messages = history(6, 100, 100);
-        let out = project_messages(&messages, 4, 24 * 1024, 2000);
+        let out = project_messages_with_stats(&messages, 4, 24 * 1024, 2000).0;
         assert_eq!(serialized(&out), serialized(&messages));
     }
 
     #[test]
     fn disabled_with_zero_budget() {
         let messages = history(6, 4000, 4000);
-        let out = project_messages(&messages, 1, 0, 0);
+        let out = project_messages_with_stats(&messages, 1, 0, 0).0;
         assert_eq!(serialized(&out), serialized(&messages));
     }
 
@@ -228,7 +270,7 @@ mod tests {
     fn projects_old_payloads_but_keeps_recent_turns_verbatim() {
         // Threshold low enough to trigger, savings huge, keep only the last turn.
         let messages = history(5, 3000, 3000);
-        let out = project_messages(&messages, 1, 1024, 100);
+        let out = project_messages_with_stats(&messages, 1, 1024, 100).0;
 
         assert_eq!(out.len(), messages.len(), "never drops messages");
         // Stable prefix untouched.
@@ -264,10 +306,25 @@ mod tests {
     }
 
     #[test]
+    fn stats_report_full_and_sent_bytes() {
+        let messages = history(5, 3000, 3000);
+        let (out, stats) = project_messages_with_stats(&messages, 1, 1024, 100);
+        assert!(stats.projected);
+        assert!(stats.sent_bytes < stats.full_bytes);
+        assert!(stats.sent_tokens_est < stats.full_tokens_est);
+        assert_eq!(stats.sent_bytes, serialized(&out).len());
+
+        let (_, untouched) = project_messages_with_stats(&messages, 4, 24 * 1024, 2000);
+        assert!(!untouched.projected);
+        assert_eq!(untouched.full_bytes, untouched.sent_bytes);
+        assert_eq!(untouched.full_tokens_est, untouched.sent_tokens_est);
+    }
+
+    #[test]
     fn projection_is_idempotent() {
         let messages = history(5, 3000, 3000);
-        let once = project_messages(&messages, 1, 1024, 100);
-        let twice = project_messages(&once, 1, 1024, 100);
+        let once = project_messages_with_stats(&messages, 1, 1024, 100).0;
+        let twice = project_messages_with_stats(&once, 1, 1024, 100).0;
         assert_eq!(serialized(&once), serialized(&twice));
     }
 
@@ -276,14 +333,14 @@ mod tests {
         // Over the byte threshold but nothing big inside: with a huge
         // min_clear the projection must not ship (it would not pay for itself).
         let messages = history(5, 100, 100);
-        let out = project_messages(&messages, 1, 100, 50_000);
+        let out = project_messages_with_stats(&messages, 1, 100, 50_000).0;
         assert_eq!(serialized(&out), serialized(&messages));
     }
 
     #[test]
     fn user_messages_and_small_payloads_stay_verbatim() {
         let messages = history(5, 100, 4000);
-        let out = project_messages(&messages, 1, 1024, 100);
+        let out = project_messages_with_stats(&messages, 1, 1024, 100).0;
         // Packet (user) untouched.
         assert_eq!(out[1].content, messages[1].content);
         // Small write args untouched (under ARG_KEEP_BYTES).

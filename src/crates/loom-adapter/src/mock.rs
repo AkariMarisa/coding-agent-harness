@@ -242,6 +242,7 @@ fn write_usage(request: &AdapterRequest) -> Result<()> {
         latency_ms: Some(1_000),
         status: Some(200),
         source: Some("runtime".to_string()),
+        ..AdapterUsageRow::default()
     };
     row.validate().map_err(|message| anyhow::anyhow!(message))?;
     let line = serde_json::to_string(&row)?;

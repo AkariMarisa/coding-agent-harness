@@ -57,6 +57,11 @@ loom route T-20261106-002
 LOOM_NATIVE_SCRIPT=/work/.smoke-native/script.json loom dispatch T-20261106-002 --adapter native --in-place
 loom verify T-20261106-002
 loom route stats
+# Step-level attribution (`doc/16` §8.4): every native run leaves a churn
+# report, and the aggregate command sees it.
+find /work/.smoke-native/.loom/runs -name churn.json | grep -q .
+loom churn stats --by model --format pretty
+loom churn stats --format json | grep -q '"estimated": true'
 loom task show T-20261106-002
 loom event list --task T-20261106-002
 loom adapter canary native

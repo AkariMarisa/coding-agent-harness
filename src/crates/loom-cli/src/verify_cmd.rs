@@ -214,21 +214,30 @@ pub(crate) fn run_verify(
 
     fs::write(&log_path, log).with_context(|| format!("write {}", log_path.display()))?;
 
-    let claim_done = claim
-        .as_ref()
-        .is_some_and(|receipt| receipt.status == ReceiptStatus::Done);
+    let claim_status = claim.as_ref().map(|receipt| receipt.status);
+    let claim_done = claim_status == Some(ReceiptStatus::Done);
     let all_pass = !evidence.is_empty()
         && evidence
             .iter()
             .all(|item| item.result == VerifyResult::Pass);
     let passed = all_pass && claim_done;
 
-    let mut receipt = Receipt::new(task_id, attempt);
-    receipt.status = if passed {
-        ReceiptStatus::Done
+    // Keep the adapter's claim when verification cannot contradict it. A
+    // `needs_input`/`blocked`/`budget_exceeded` run is not a model failure:
+    // recording it as `task.failed` used to pollute the escalation counter
+    // (doc/15 §2.1). A failed acceptance still wins over any claim.
+    let status = if passed || !all_pass {
+        if passed {
+            ReceiptStatus::Done
+        } else {
+            ReceiptStatus::Failed
+        }
     } else {
-        ReceiptStatus::Failed
+        claim_status.unwrap_or(ReceiptStatus::Failed)
     };
+
+    let mut receipt = Receipt::new(task_id, attempt);
+    receipt.status = status;
     receipt.base_sha = base_sha;
     receipt.head_sha = head_sha;
     receipt.branch = branch;
@@ -279,8 +288,18 @@ pub(crate) fn run_verify(
                 failure.id, failure.exit, failure.cmd
             );
         } else if !claim_done {
-            receipt.next_hint =
-                "adapter claim was not done; verify cannot mark the task passed".to_string();
+            receipt.next_hint = match status {
+                ReceiptStatus::NeedsInput => {
+                    "adapter needs input; answer, then dispatch the task again".to_string()
+                }
+                ReceiptStatus::Blocked => {
+                    "adapter blocked; resolve the blocker, then dispatch the task again".to_string()
+                }
+                ReceiptStatus::BudgetExceeded => {
+                    "adapter exceeded its budget; raise the limit or split the task".to_string()
+                }
+                _ => "adapter claim was not done; verify cannot mark the task passed".to_string(),
+            };
         }
     }
 
@@ -306,8 +325,14 @@ pub(crate) fn run_verify(
         )?;
     }
 
-    if passed {
-        append_event(
+    let verify_ids = json!(receipt
+        .verify
+        .iter()
+        .filter(|item| item.result == VerifyResult::Fail)
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>());
+    match status {
+        ReceiptStatus::Done => append_event(
             project,
             &loom_core::Event::new(&run.id, now_ms(), EventType::TaskPassed)
                 .task(task_id)
@@ -320,31 +345,44 @@ pub(crate) fn run_verify(
                         .map(|item| item.id.clone())
                         .collect::<Vec<_>>()),
                 )]),
-        )?;
-    } else {
-        let code = if claim_done {
-            "verify_fail"
-        } else {
-            "claim_not_done"
-        };
-        append_event(
+        )?,
+        ReceiptStatus::NeedsInput => append_event(
             project,
-            &loom_core::Event::new(&run.id, now_ms(), EventType::TaskFailed)
+            &loom_core::Event::new(&run.id, now_ms(), EventType::TaskNeedsInput)
                 .task(task_id)
                 .attempt(attempt)
                 .data([
-                    ("code".to_string(), json!(code)),
-                    (
-                        "verify_ids".to_string(),
-                        json!(receipt
-                            .verify
-                            .iter()
-                            .filter(|item| item.result == VerifyResult::Fail)
-                            .map(|item| item.id.clone())
-                            .collect::<Vec<_>>()),
-                    ),
+                    ("code".to_string(), json!("needs_input")),
+                    ("verify_ids".to_string(), verify_ids),
                 ]),
-        )?;
+        )?,
+        ReceiptStatus::Blocked | ReceiptStatus::BudgetExceeded => append_event(
+            project,
+            &loom_core::Event::new(&run.id, now_ms(), EventType::TaskBlocked)
+                .task(task_id)
+                .attempt(attempt)
+                .data([
+                    ("code".to_string(), json!(status.as_str())),
+                    ("verify_ids".to_string(), verify_ids),
+                ]),
+        )?,
+        ReceiptStatus::Failed => {
+            let code = if claim_done {
+                "verify_fail"
+            } else {
+                "claim_not_done"
+            };
+            append_event(
+                project,
+                &loom_core::Event::new(&run.id, now_ms(), EventType::TaskFailed)
+                    .task(task_id)
+                    .attempt(attempt)
+                    .data([
+                        ("code".to_string(), json!(code)),
+                        ("verify_ids".to_string(), verify_ids),
+                    ]),
+            )?;
+        }
     }
     sync_index(project)?;
 

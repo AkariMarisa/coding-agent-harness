@@ -36,6 +36,8 @@ pub enum EventType {
     TaskMerged,
     #[serde(rename = "task.blocked")]
     TaskBlocked,
+    #[serde(rename = "task.needs_input")]
+    TaskNeedsInput,
     #[serde(rename = "budget.warning")]
     BudgetWarning,
     #[serde(rename = "budget.exceeded")]
@@ -65,6 +67,7 @@ impl EventType {
             Self::TaskFallback => "task.fallback",
             Self::TaskMerged => "task.merged",
             Self::TaskBlocked => "task.blocked",
+            Self::TaskNeedsInput => "task.needs_input",
             Self::BudgetWarning => "budget.warning",
             Self::BudgetExceeded => "budget.exceeded",
             Self::HumanApproved => "human.approved",
@@ -93,6 +96,7 @@ impl FromStr for EventType {
             "task.fallback" => Ok(Self::TaskFallback),
             "task.merged" => Ok(Self::TaskMerged),
             "task.blocked" => Ok(Self::TaskBlocked),
+            "task.needs_input" => Ok(Self::TaskNeedsInput),
             "budget.warning" => Ok(Self::BudgetWarning),
             "budget.exceeded" => Ok(Self::BudgetExceeded),
             "human.approved" => Ok(Self::HumanApproved),
@@ -210,6 +214,7 @@ impl Event {
                 | EventType::TaskFallback
                 | EventType::TaskMerged
                 | EventType::TaskBlocked
+                | EventType::TaskNeedsInput
         );
         if needs_task && self.task_id.is_none() {
             return Err(format!(

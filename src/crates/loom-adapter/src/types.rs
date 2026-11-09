@@ -87,6 +87,28 @@ pub struct AdapterUsageRow {
     pub status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Step-level attribution (`doc/16` §8.4). Optional so existing adapters
+    /// keep producing valid rows; native fills them in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<u32>,
+    /// Real provider id, next to `model` (the configured alias).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_names: Option<Vec<String>>,
+    /// Files this step wrote (full-file `write`, not `edit`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_paths: Option<Vec<String>>,
+    /// Full rewrites of already-written files in this step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rewrite_count: Option<u32>,
+    /// Serialized history before projection (the request an unprojected loop
+    /// would have sent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_bytes: Option<u64>,
+    /// Serialized history actually sent after projection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projected_bytes: Option<u64>,
 }
 
 pub const ADAPTER_USAGE_VERSION: u8 = 1;
@@ -107,6 +129,13 @@ impl Default for AdapterUsageRow {
             latency_ms: None,
             status: None,
             source: None,
+            step: None,
+            model_id: None,
+            tool_names: None,
+            write_paths: None,
+            rewrite_count: None,
+            history_bytes: None,
+            projected_bytes: None,
         }
     }
 }
@@ -137,6 +166,16 @@ impl AdapterUsageRow {
         if let Some(cost) = self.cost_usd {
             if !cost.is_finite() || cost < 0.0 {
                 return Err("cost_usd must be finite and >= 0".to_string());
+            }
+        }
+        if self.step == Some(0) {
+            return Err("step is 1-based".to_string());
+        }
+        if let (Some(history), Some(projected)) = (self.history_bytes, self.projected_bytes) {
+            if projected > history {
+                return Err(format!(
+                    "projected_bytes ({projected}) exceeds history_bytes ({history})"
+                ));
             }
         }
         Ok(())

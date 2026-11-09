@@ -167,4 +167,50 @@ loom event list --task T-20261106-003
 
 loom adapter canary mock
 
+# needs_input must not be recorded as task.failed (doc/15 §2.1): the task
+# stays re-dispatchable and the escalation counter must not see a failure.
+cat > /work/.smoke/task-needs-input.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-004",
+  "goal_id": "G-20261106-smoke",
+  "title": "smoke needs_input task",
+  "role": "implement",
+  "tier": "worker",
+  "depends_on": [],
+  "workspace": {
+    "mode": "in_place",
+    "base_ref": "main",
+    "branch": "agent/T-20261106-004",
+    "allowed_paths": ["src/**"],
+    "forbidden_paths": []
+  },
+  "inputs": [],
+  "constraints": {"max_files_touched": 4, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "true", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 25, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": ["verify_log"]}
+}
+EOF
+loom task add --file /work/.smoke/task-needs-input.json > /dev/null
+LOOM_MOCK_MODE=needs_input loom dispatch T-20261106-004 --adapter mock --in-place > /dev/null || true
+# Verification cannot pass a needs_input claim, but it must move the task to
+# needs_input instead of failed.
+if loom verify T-20261106-004 --format json > /dev/null; then
+    echo "expected verify of a needs_input claim to be non-passing" >&2
+    exit 1
+fi
+loom event list --task T-20261106-004 --format json | grep -q '"task.needs_input"' || {
+    echo "expected task.needs_input event" >&2
+    exit 1
+}
+if loom event list --task T-20261106-004 --format json | grep -q '"task.failed"'; then
+    echo "needs_input must not emit task.failed" >&2
+    exit 1
+fi
+loom board --format json | grep -q '"T-20261106-004"' || {
+    echo "expected needs_input task on the board" >&2
+    exit 1
+}
+
 echo "SMOKE_OK"

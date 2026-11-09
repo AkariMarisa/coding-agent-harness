@@ -124,6 +124,23 @@ pub struct UsageRecord {
     pub latency_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
+    /// 1-based step inside the run; absent for one-shot requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_names: Option<Vec<String>>,
+    /// Files this step wrote in full (not `edit`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_paths: Option<Vec<String>>,
+    /// Full rewrites of already-written files in this step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rewrite_count: Option<u32>,
+    /// Chat history bytes before projection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_bytes: Option<u64>,
+    /// Chat history bytes actually sent after projection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projected_bytes: Option<u64>,
 }
 
 fn default_version() -> u8 {
@@ -152,6 +169,12 @@ impl Default for UsageRecord {
             source: UsageSource::Unknown,
             latency_ms: None,
             status: None,
+            step: None,
+            tool_names: None,
+            write_paths: None,
+            rewrite_count: None,
+            history_bytes: None,
+            projected_bytes: None,
         }
     }
 }
@@ -191,6 +214,16 @@ impl UsageRecord {
             if cached > input {
                 return Err(format!(
                     "cached_input_tokens ({cached}) exceeds input_tokens ({input})"
+                ));
+            }
+        }
+        if self.step == Some(0) {
+            return Err("step is 1-based".to_string());
+        }
+        if let (Some(history), Some(projected)) = (self.history_bytes, self.projected_bytes) {
+            if projected > history {
+                return Err(format!(
+                    "projected_bytes ({projected}) exceeds history_bytes ({history})"
                 ));
             }
         }

@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::Format;
 
-const COLUMNS: [(&str, TaskStatus); 11] = [
+const COLUMNS: [(&str, TaskStatus); 12] = [
     ("pending", TaskStatus::Pending),
     ("ready", TaskStatus::Ready),
     ("dispatched", TaskStatus::Dispatched),
@@ -16,6 +16,7 @@ const COLUMNS: [(&str, TaskStatus); 11] = [
     ("passed", TaskStatus::Passed),
     ("merged", TaskStatus::Merged),
     ("blocked", TaskStatus::Blocked),
+    ("needs_input", TaskStatus::NeedsInput),
     ("failed", TaskStatus::Failed),
     ("escalated", TaskStatus::Escalated),
     ("cancelled", TaskStatus::Cancelled),

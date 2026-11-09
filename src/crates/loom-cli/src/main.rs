@@ -20,6 +20,7 @@ use loom_tools::{
 
 mod adapter_cmd;
 mod board_cmd;
+mod churn_cmd;
 mod context_cmd;
 mod dispatch_cmd;
 mod event_cmd;
@@ -170,6 +171,11 @@ enum Command {
     },
     /// Aggregate the request ledger into CPVT/TPVT/WPT.
     Ledger(LedgerArgs),
+    /// Show step-level churn attribution from native run logs.
+    Churn {
+        #[command(subcommand)]
+        command: ChurnCommand,
+    },
     /// Read a paged artifact produced by a previous tool call.
     Artifact {
         #[arg(long = "ref")]
@@ -178,6 +184,16 @@ enum Command {
         range: Option<String>,
         #[arg(long)]
         max_lines: Option<usize>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ChurnCommand {
+    /// Aggregate logs/churn.json across native runs.
+    Stats {
+        /// Group by model alias/provider id.
+        #[arg(long)]
+        by: Option<String>,
     },
 }
 
@@ -513,6 +529,9 @@ fn run(cli: Cli) -> Result<i32> {
             }
         },
         Command::Ledger(args) => ledger(&project, args, cli.run.as_deref(), cli.format),
+        Command::Churn { command } => match command {
+            ChurnCommand::Stats { by } => churn_cmd::stats(&project, by.as_deref(), cli.format),
+        },
         Command::Tool { command } => {
             let config = project.load_config()?;
             let run = Run::open(project.clone(), cli.run.as_deref())?;
