@@ -4,6 +4,7 @@
 //! placeholders: `loom init` never asks anyone to write an md file by hand.
 
 use std::fs;
+use std::io::{IsTerminal, Write as _};
 use std::path::Path;
 
 use anyhow::{bail, Context as _, Result};
@@ -30,13 +31,41 @@ impl Intent {
         }
     }
 
+    const fn command(self) -> &'static str {
+        match self {
+            Self::Goal => "loom goal",
+            Self::Constraints => "loom constraints",
+        }
+    }
+
     fn template(self) -> &'static str {
         match self {
             Self::Goal => include_str!("../prompts/goal-draft@1.md"),
             Self::Constraints => include_str!("../prompts/constraints-draft@1.md"),
         }
     }
+
+    fn questions(self) -> &'static [&'static str] {
+        match self {
+            Self::Goal => GOAL_QUESTIONS,
+            Self::Constraints => CONSTRAINTS_QUESTIONS,
+        }
+    }
 }
+
+/// Interactive prompts (`-i`). Short on purpose: answers are injected into
+/// the prompt alongside repo evidence, so they compete for the same budget.
+const GOAL_QUESTIONS: &[&str] = &[
+    "这个项目解决什么问题、给谁用？（一句话）",
+    "本期最先要跑通的一条链路是什么？",
+    "明确不做什么？（留空跳过）",
+];
+const CONSTRAINTS_QUESTIONS: &[&str] = &[
+    "哪些路径或文件绝对不能改？（如迁移、CI、vendor；留空跳过）",
+    "能不能新增依赖？（留空跳过）",
+    "用什么命令跑测试/检查？（留空跳过）",
+    "影响命令执行的环境事实？（离线/代理/版本；留空跳过）",
+];
 
 /// Evidence byte budget: same "summary + address" rule the tools follow —
 /// never ship a whole repo into one prompt.
@@ -53,6 +82,7 @@ pub fn draft(
     intent: Intent,
     model: Option<&str>,
     force: bool,
+    interactive: bool,
     format: Format,
 ) -> Result<i32> {
     let config = project
@@ -74,17 +104,31 @@ pub fn draft(
         );
     }
 
+    let answers = if interactive {
+        ask(intent.questions())?
+    } else if std::io::stdin().is_terminal() {
+        eprintln!("tip: {} -i 先回答几个问题再起草", intent.command());
+        Vec::new()
+    } else {
+        Vec::new()
+    };
+
     let evidence = gather_evidence(&project.root, intent);
     let system = intent.template().replace("{{evidence}}", &evidence);
+    let answer_block = render_answers(intent.questions(), &answers);
+    let user = if answer_block.is_empty() {
+        "直接输出 Markdown 正文，不要代码围栏，不要解释。".to_string()
+    } else {
+        format!(
+            "## 用户回答（与仓库证据冲突时以回答为准）\n{answer_block}\n\n直接输出 Markdown 正文，不要代码围栏，不要解释。"
+        )
+    };
 
     let mut provider = OpenAiProvider::from_env_with_capability(capability)?;
     let response = provider
         .complete(&ChatRequest {
             model: model_id.clone(),
-            messages: vec![
-                ChatMessage::system(system),
-                ChatMessage::user("直接输出 Markdown 正文，不要代码围栏，不要解释。"),
-            ],
+            messages: vec![ChatMessage::system(system), ChatMessage::user(user)],
             tools: json!([]),
             max_tokens: 2_000,
             temperature: 0.2,
@@ -134,6 +178,37 @@ pub fn draft(
     Ok(0)
 }
 
+/// Interactive prompts for `-i`. Questions go to stderr so stdout stays
+/// parseable (`--format json` default); answers are read from stdin.
+fn ask(questions: &[&str]) -> Result<Vec<String>> {
+    if !std::io::stdin().is_terminal() {
+        bail!("--interactive needs a terminal; drop -i to draft straight from repo evidence");
+    }
+    eprintln!("回答几个问题，答案会注入起草（留空跳过该题）");
+    let mut answers = Vec::new();
+    for question in questions {
+        eprint!("? {question} ");
+        std::io::stderr().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        answers.push(line.trim().to_string());
+    }
+    Ok(answers)
+}
+
+/// Empty answers are dropped: "留空跳过" must not turn into "答：无".
+fn render_answers(questions: &[&str], answers: &[String]) -> String {
+    let lines: Vec<String> = questions
+        .iter()
+        .zip(answers.iter())
+        .filter_map(|(question, answer)| {
+            let answer = answer.trim();
+            (!answer.is_empty()).then(|| format!("- {question}\n  答：{answer}"))
+        })
+        .collect();
+    lines.join("\n")
+}
+
 /// One configured model is used automatically; otherwise the alias must be
 /// given. Fail fast with the available list instead of guessing.
 fn pick_alias<'a>(config: &'a Config, requested: Option<&'a str>) -> Result<&'a str> {
@@ -157,7 +232,9 @@ fn pick_alias<'a>(config: &'a Config, requested: Option<&'a str>) -> Result<&'a 
             }
         }
         None => match config.models.len() {
-            0 => bail!("no [[models]] in .loom/config.toml; add one or pass --model"),
+            0 => bail!(
+                "no [[models]] in .loom/config.toml; run `loom model init` (or add one manually)"
+            ),
             1 => Ok(config.models[0].alias.as_str()),
             count => bail!(
                 "{count} models configured; pass --model <alias> ({})",
@@ -361,5 +438,14 @@ mod tests {
     fn strips_wrapping_fence() {
         assert_eq!(strip_fence("```markdown\n# Goal\n```"), "# Goal");
         assert_eq!(strip_fence("# Goal"), "# Goal");
+    }
+
+    #[test]
+    fn answers_drop_empty_and_keep_order() {
+        let questions = ["问题一", "问题二", "问题三"];
+        let answers = vec!["".to_string(), "答二".to_string(), "  ".to_string()];
+        let block = render_answers(&questions, &answers);
+        assert_eq!(block, "- 问题二\n  答：答二");
+        assert!(render_answers(&questions, &Vec::new()).is_empty());
     }
 }

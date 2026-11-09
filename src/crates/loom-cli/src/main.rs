@@ -27,6 +27,7 @@ mod dispatch_cmd;
 mod event_cmd;
 mod goal_cmd;
 mod merge_cmd;
+mod model_cmd;
 mod prompt_cmd;
 mod resume_cmd;
 mod route_cmd;
@@ -82,6 +83,9 @@ enum Command {
         /// Regenerate an existing .loom/goal.md (uncommitted edits would be lost).
         #[arg(long)]
         force: bool,
+        /// Ask a few questions first; answers are injected into the prompt.
+        #[arg(short = 'i', long)]
+        interactive: bool,
     },
     /// Draft .loom/constraints.md from repo evidence (model drafts, human reviews the diff).
     Constraints {
@@ -91,6 +95,14 @@ enum Command {
         /// Regenerate an existing .loom/constraints.md (uncommitted edits would be lost).
         #[arg(long)]
         force: bool,
+        /// Ask a few questions first; answers are injected into the prompt.
+        #[arg(short = 'i', long)]
+        interactive: bool,
+    },
+    /// Manage [[models]] entries in .loom/config.toml.
+    Model {
+        #[command(subcommand)]
+        command: ModelCommand,
     },
     /// Show project and run summary.
     Status,
@@ -236,6 +248,16 @@ enum CapabilityCommand {
     Check {
         /// Check one alias; omit to check all.
         alias: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ModelCommand {
+    /// Detect <PREFIX>_API_BASE/_API_KEY env pairs and draft [[models]] entries.
+    Init {
+        /// Write detected defaults without prompting (non-TTY without it is preview-only).
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -478,24 +500,44 @@ fn run(cli: Cli) -> Result<i32> {
             if report.gitignore_updated {
                 println!("  updated .gitignore (.loom whitelist)");
             }
+            if project
+                .load_config()
+                .map(|config| config.models.is_empty())
+                .unwrap_or(true)
+            {
+                println!("next: loom model init      # detect *_API_BASE/_API_KEY pairs, draft [[models]]");
+            }
             println!("next (optional): loom goal    # model-drafts .loom/goal.md, review the diff");
             Ok(0)
         }
         Command::Doctor => doctor(&project),
-        Command::Goal { model, force } => goal_cmd::draft(
+        Command::Goal {
+            model,
+            force,
+            interactive,
+        } => goal_cmd::draft(
             &project,
             goal_cmd::Intent::Goal,
             model.as_deref(),
             force,
+            interactive,
             cli.format,
         ),
-        Command::Constraints { model, force } => goal_cmd::draft(
+        Command::Constraints {
+            model,
+            force,
+            interactive,
+        } => goal_cmd::draft(
             &project,
             goal_cmd::Intent::Constraints,
             model.as_deref(),
             force,
+            interactive,
             cli.format,
         ),
+        Command::Model { command } => match command {
+            ModelCommand::Init { yes } => model_cmd::init(&project, yes, cli.format),
+        },
         Command::Status => status(&project),
         Command::Board => board_cmd::board(&project, cli.format),
         Command::Capability { command } => capability(&project, command, cli.format),
