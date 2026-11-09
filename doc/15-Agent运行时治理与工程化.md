@@ -774,8 +774,8 @@ score = tag_match * 3
 `loom init` 只做：
 
 - 建 `.loom/{tasks,runs,ledger,snapshots,locks}`；
-- 写默认 `config.toml`、`goal.md`、`constraints.md`；
-- 更新 `.gitignore`。
+- 写默认 `config.toml` 与契约层导览 `.loom/README.md`（不再写 goal/constraints 占位模板，由 `loom goal` / `loom constraints` 起草）；
+- 把根 `.gitignore` 迁到白名单（`/.loom/*` + 反选，契约层 tracked、状态层 ignored）。
 
 `loom doctor` 只检查 `.loom`、git、config、可写。它不探测技术栈、不检查工具链、不生成 acceptance、不提供本地 CI。结果是：
 

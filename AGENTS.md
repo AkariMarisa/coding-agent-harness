@@ -78,10 +78,11 @@ src/
 
 ## 6. 状态与文件所有权
 
-- `.loom/` 是运行时状态，**不要提交**，也不要手改事实源。
-- orchestrator 是唯一写者；worker 只写代码 + `outbox/`。
-- 当前 M0 只有 `loom init` 创建骨架；任务图/事件日志尚未实现。
-- 不要把 `.loom/` 的内容复制进 `doc/` 或测试夹具。
+- `.loom/` 分两层，根 `.gitignore` 用**白名单**（`/.loom/*` + 反选，新增状态默认忽略）：
+  - **契约层** tracked：`README.md`、`goal.md`、`constraints.md`、`specs/`（ownership 表见 `.loom/README.md`）；
+  - **状态层** ignored：`tasks/`、`runs/`、`ledger/`、`snapshots/`、`locks/`、`config.toml`、`events.jsonl` 等，**不要提交**，也不要手改事实源（事件日志 append-only）。
+- orchestrator 是状态层唯一写者；worker 只写代码 + `outbox/`；契约层由人与控制面共同维护，走 git review（`loom goal` / `loom constraints` 起草，人审 diff，见 §10）。
+- 不要把状态层内容复制进 `doc/` 或测试夹具。
 
 ## 7. 测试与质量
 
@@ -119,7 +120,15 @@ make check
 - 大改动前先确认设计文档已同步。
 - 不要用 `git push --force` 改写主分支历史，除非用户明确要求。
 
-## 10. 当前里程碑（M0）
+## 10. 引导优于限制，责任归用户
+
+- 需要用户提供信息时，用命令 / workflow 引导生成（工具起草、人确认 diff），不输出“请按格式填写”的空模板让人手写。
+- 用户可以乱改、乱删、乱配置，后果由用户承担；**不为极端滥用在架构里到处加限制**。可恢复的误用（删导览文件、改配置、清本地状态）一律不管，靠 git / 重新 init 兜底。
+- 只有**工具内不可恢复**的破坏（清历史事件、覆盖未提交工作、删 tracked 契约）才必须醒目警告：一次说清后果与恢复方式；不拦截、不连环确认。
+- “限制”与 “fail fast” 的边界：**注定无法成功的路径**（例如 spec 被 gitignore 后仍派发）直接报错并说明改法，这不算限制；**用户能做成的路径**不要拦。
+- 本条约束的是对**人的**限制；agent 侧守卫（write 守卫、scope gate、重试熔断）不受影响——防的是 agent 漂移，不是用户滥用。
+
+## 11. 当前里程碑（M0）
 
 已完成/进行中：
 

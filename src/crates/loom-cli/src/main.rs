@@ -1,13 +1,14 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use loom_core::{
-    truncate_chars, Budget, BudgetLevel, Config, CostSource, Envelope, ErrorCode, Limits,
-    ModelCapability, Tier, ToolError, UsageAggregate, UsageFilter, UsageRecord, UsageSource, Wire,
+    estimate_tokens, truncate_chars, Budget, BudgetLevel, Config, CostSource, Envelope, ErrorCode,
+    Limits, ModelCapability, Tier, ToolError, UsageAggregate, UsageFilter, UsageRecord,
+    UsageSource, Wire,
 };
 use loom_store::{
     aggregate_usage, append_tool_event, append_usage, ledger_path, now_ms, read_usage, totals,
@@ -24,6 +25,7 @@ mod churn_cmd;
 mod context_cmd;
 mod dispatch_cmd;
 mod event_cmd;
+mod goal_cmd;
 mod merge_cmd;
 mod prompt_cmd;
 mod resume_cmd;
@@ -64,14 +66,32 @@ enum Format {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create the .loom skeleton.
+    /// Create the .loom skeleton (contract layer tracked, state layer ignored).
     Init {
-        /// Overwrite config.toml (goal.md and constraints.md are never overwritten).
+        /// Overwrite config.toml (existing README.md / goal.md / constraints.md are kept).
         #[arg(long)]
         force: bool,
     },
     /// Check the local workspace and runtime layout.
     Doctor,
+    /// Draft .loom/goal.md from repo evidence (model drafts, human reviews the diff).
+    Goal {
+        /// Model alias from .loom/config.toml; defaults to the only configured model.
+        #[arg(long)]
+        model: Option<String>,
+        /// Regenerate an existing .loom/goal.md (uncommitted edits would be lost).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Draft .loom/constraints.md from repo evidence (model drafts, human reviews the diff).
+    Constraints {
+        /// Model alias from .loom/config.toml; defaults to the only configured model.
+        #[arg(long)]
+        model: Option<String>,
+        /// Regenerate an existing .loom/constraints.md (uncommitted edits would be lost).
+        #[arg(long)]
+        force: bool,
+    },
     /// Show project and run summary.
     Status,
     /// Show tasks grouped by status, plus running/lock counts.
@@ -456,12 +476,26 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("  kept    {}", path.display());
             }
             if report.gitignore_updated {
-                println!("  updated .gitignore (.loom/, .worktrees/)");
+                println!("  updated .gitignore (.loom whitelist)");
             }
-            println!("next: edit .loom/goal.md and .loom/constraints.md");
+            println!("next (optional): loom goal    # model-drafts .loom/goal.md, review the diff");
             Ok(0)
         }
         Command::Doctor => doctor(&project),
+        Command::Goal { model, force } => goal_cmd::draft(
+            &project,
+            goal_cmd::Intent::Goal,
+            model.as_deref(),
+            force,
+            cli.format,
+        ),
+        Command::Constraints { model, force } => goal_cmd::draft(
+            &project,
+            goal_cmd::Intent::Constraints,
+            model.as_deref(),
+            force,
+            cli.format,
+        ),
         Command::Status => status(&project),
         Command::Board => board_cmd::board(&project, cli.format),
         Command::Capability { command } => capability(&project, command, cli.format),
@@ -1244,6 +1278,26 @@ fn print_pretty(envelope: &Envelope) {
     }
 }
 
+/// `git check-ignore -q <path>`: Some(true) ignored, Some(false) trackable,
+/// None when git itself failed (not a repo, no git binary).
+fn git_check_ignore(root: &Path, relative: &str) -> Option<bool> {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &root.display().to_string(),
+            "check-ignore",
+            "-q",
+            relative,
+        ])
+        .output()
+        .ok()?;
+    match output.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
+}
+
 fn doctor(project: &Project) -> Result<i32> {
     let mut healthy = true;
     let mut check = |name: &str, pass: bool, detail: &str| {
@@ -1252,6 +1306,8 @@ fn doctor(project: &Project) -> Result<i32> {
             healthy = false;
         }
     };
+    // Advisory only: doctor diagnoses, it never blocks (AGENTS.md §10).
+    let warn = |name: &str, detail: &str| println!("[warn] {name:<12} {detail}");
 
     let loom = project.loom_dir();
     check(".loom", loom.is_dir(), &loom.display().to_string());
@@ -1276,6 +1332,73 @@ fn doctor(project: &Project) -> Result<i32> {
         match fs::write(&probe, b"ok").and_then(|()| fs::remove_file(&probe)) {
             Ok(()) => check("writable", true, ".loom/"),
             Err(error) => check("writable", false, &error.to_string()),
+        }
+
+        // Contract layer (AGENTS.md §6). Ground truth beats pattern matching:
+        // `git check-ignore -q` exits 0 only for ignored paths (a negated
+        // match exits 1), so a shadowing legacy rule is caught directly.
+        let contract_probe = ["README.md", "goal.md", "constraints.md"]
+            .iter()
+            .map(|name| format!(".loom/{name}"))
+            .find(|path| project.root.join(path).exists());
+        match contract_probe {
+            Some(probe) => match git_check_ignore(&project.root, &probe) {
+                Some(true) => warn(
+                    "gitignore",
+                    &format!(
+                        "contract layer ignored ({probe}); run `loom init`, then remove other .loom rules"
+                    ),
+                ),
+                Some(false) => check("gitignore", true, ".loom whitelist"),
+                None => check("gitignore", true, "unverified (git check-ignore failed)"),
+            },
+            None => {
+                let text =
+                    fs::read_to_string(project.root.join(".gitignore")).unwrap_or_default();
+                if text.lines().any(|line| line.trim() == "/.loom/*") {
+                    check("gitignore", true, ".loom whitelist");
+                } else {
+                    warn(
+                        "gitignore",
+                        "no .loom rule; run `loom init` to install the whitelist",
+                    );
+                }
+            }
+        }
+        if project.root.join(".loom/config.toml").exists()
+            && matches!(
+                git_check_ignore(&project.root, ".loom/config.toml"),
+                Some(false)
+            )
+        {
+            warn(
+                "gitignore",
+                "state layer not ignored: .loom/config.toml is trackable; run `loom init`",
+            );
+        }
+
+        let cap = loom_context::ContextKind::Worker.budget().goal;
+        for (name, command) in [
+            ("goal.md", "loom goal"),
+            ("constraints.md", "loom constraints"),
+        ] {
+            let path = loom.join(name);
+            if !path.exists() {
+                println!("[info] {name:<12} not drafted yet → {command}");
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            let tokens = estimate_tokens(&text);
+            if tokens > cap {
+                warn(
+                    name,
+                    &format!(
+                        "{tokens} tokens > worker cap {cap}; packets truncate it — trim before commit"
+                    ),
+                );
+            } else {
+                check(name, true, &format!("{tokens}/{cap} tokens"));
+            }
         }
 
         // `doc/03` §13: leftover locks are cleaned here; a lock whose lease

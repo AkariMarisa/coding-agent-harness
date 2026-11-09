@@ -84,8 +84,8 @@ loom() {
 }
 loom init
 
-# The default goal.md is a placeholder that mentions "orchestrator"; real
-# models read it and role-confuse. Give the smoke repo an actual goal.
+# init no longer writes a goal.md placeholder; give the smoke repo an
+# actual goal (readable as data, not as role instructions).
 cat > /work/.smoke-live/.loom/goal.md <<'EOF'
 # Goal
 

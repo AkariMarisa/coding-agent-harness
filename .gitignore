@@ -7,7 +7,6 @@
 /.cache/
 
 # Loom runtime state (per project, never committed)
-/.loom/
 /.worktrees/
 /.smoke/
 /.smoke-*/
@@ -24,3 +23,11 @@
 # OS / temporary
 *.swp
 *.tmp
+
+# loom: contract layer tracked, state layer ignored (whitelist)
+/.loom/*
+!/.loom/README.md
+!/.loom/goal.md
+!/.loom/constraints.md
+!/.loom/specs/
+.worktrees/

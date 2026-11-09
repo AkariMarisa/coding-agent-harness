@@ -14,6 +14,7 @@ clap.workspace = true
 loom-adapter = { path = "../loom-adapter" }
 loom-context = { path = "../loom-context" }
 loom-core = { path = "../loom-core" }
+loom-native = { path = "../loom-native" }
 loom-store = { path = "../loom-store" }
 loom-tools = { path = "../loom-tools" }
 serde.workspace = true

@@ -17,6 +17,35 @@ pub struct InitReport {
     pub gitignore_updated: bool,
 }
 
+/// Orientation file for the tracked contract layer. Users are free to delete
+/// it; `loom init` recreates it on the next run.
+pub const LOOM_README: &str = "\
+# .loom/ — Loom 的工作目录
+
+两层结构（根 `.gitignore` 白名单：`/.loom/*` + 反选，新增状态默认忽略）：
+
+| 层 | 路径 | git |
+|---|---|---|
+| 契约层 | `README.md`、`goal.md`、`constraints.md`、`specs/` | tracked |
+| 状态层 | `tasks/`、`runs/`、`ledger/`、`snapshots/`、`locks/`、`config.toml`、`events.jsonl` 等其余全部 | ignored |
+
+- 契约层：人与控制面共同维护，走 git review；`loom goal` / `loom constraints` 起草，人审 diff；模块契约放 `specs/`。
+- 状态层：orchestrator 唯一写者；事件日志 append-only，不要手改事实源。
+- ⚠️ `rm -rf .loom/` 会连契约层一起删（tracked 可从 git 恢复），状态层不可恢复。
+- 分层规则见仓库 `AGENTS.md` §6。
+";
+
+/// Root `.gitignore` block. It must live at the root and must exclude
+/// *children* (`/.loom/*`), not the directory itself: once `.loom/` is
+/// excluded, git never descends and every `!` negation inside becomes inert.
+const GITIGNORE_WHITELIST: &str = "\
+# loom: contract layer tracked, state layer ignored (whitelist)
+/.loom/*
+!/.loom/README.md
+!/.loom/goal.md
+!/.loom/constraints.md
+!/.loom/specs/";
+
 impl Project {
     pub fn at(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
@@ -81,62 +110,55 @@ impl Project {
             report.skipped_files.push(config_path);
         }
 
-        let goal = self.loom_dir().join("goal.md");
-        if !goal.exists() {
-            fs::write(
-                &goal,
-                "# Goal\n\n<!-- 人写：项目目标、范围、非目标。orchestrator 只读。 -->\n",
-            )
-            .with_context(|| "write goal.md")?;
-            report.created_files.push(goal);
+        // No fill-in placeholders: `loom goal` / `loom constraints` draft these
+        // with a model and the human reviews the diff (AGENTS.md §10).
+        let readme = self.loom_dir().join("README.md");
+        if !readme.exists() {
+            fs::write(&readme, LOOM_README).with_context(|| "write .loom/README.md")?;
+            report.created_files.push(readme);
         } else {
-            report.skipped_files.push(goal);
-        }
-
-        let constraints = self.loom_dir().join("constraints.md");
-        if !constraints.exists() {
-            fs::write(
-                &constraints,
-                "# Constraints\n\n<!-- 人写：技术约束、禁止事项、验收偏好。 -->\n",
-            )
-            .with_context(|| "write constraints.md")?;
-            report.created_files.push(constraints);
-        } else {
-            report.skipped_files.push(constraints);
+            report.skipped_files.push(readme);
         }
 
         report.gitignore_updated = self.ensure_gitignore()?;
         Ok(report)
     }
 
+    /// Migrate legacy whole-dir `.loom/` rules to the whitelist block and
+    /// keep `.worktrees/` ignored. Idempotent: a second run reports no change.
     fn ensure_gitignore(&self) -> Result<bool> {
         if !self.root.join(".git").exists() {
             return Ok(false);
         }
 
         let path = self.root.join(".gitignore");
-        let mut text = if path.exists() {
+        let text = if path.exists() {
             fs::read_to_string(&path).with_context(|| "read .gitignore")?
         } else {
             String::new()
         };
 
-        let mut changed = false;
-        for entry in [".loom/", ".worktrees/"] {
-            if !text.lines().any(|line| line.trim() == entry) {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(entry);
-                text.push('\n');
-                changed = true;
+        let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+        // A whole-dir rule (with or without leading slash) makes git skip
+        // `.loom/` entirely, so every `!` negation below it is inert: remove
+        // it first, whether or not the whitelist block is already present.
+        lines.retain(|line| !matches!(line.trim(), ".loom/" | ".loom" | "/.loom/" | "/.loom"));
+        if !lines.iter().any(|line| line.trim() == "/.loom/*") {
+            if lines.iter().any(|line| !line.trim().is_empty()) {
+                lines.push(String::new());
             }
+            lines.extend(GITIGNORE_WHITELIST.lines().map(String::from));
+        }
+        if !lines.iter().any(|line| line.trim() == ".worktrees/") {
+            lines.push(".worktrees/".to_string());
         }
 
-        if changed {
-            fs::write(&path, text).with_context(|| "write .gitignore")?;
+        let new_text = lines.join("\n") + "\n";
+        if new_text == text {
+            return Ok(false);
         }
-        Ok(changed)
+        fs::write(&path, new_text).with_context(|| "write .gitignore")?;
+        Ok(true)
     }
 
     /// Resolve a repository-relative path, rejecting traversal and symlink escapes.
@@ -214,7 +236,76 @@ mod tests {
         project.init(false).expect("init");
 
         assert!(project.loom_dir().join("config.toml").exists());
-        assert!(project.loom_dir().join("goal.md").exists());
+        assert!(project.loom_dir().join("README.md").exists());
         assert!(project.loom_dir().join("runs").is_dir());
+        // No fill-in placeholders: `loom goal` drafts these on demand.
+        assert!(!project.loom_dir().join("goal.md").exists());
+        assert!(!project.loom_dir().join("constraints.md").exists());
+    }
+
+    #[test]
+    fn init_writes_gitignore_whitelist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(dir.path().join(".git")).expect("fake .git");
+        let project = Project::at(dir.path());
+        project.init(false).expect("init");
+
+        let text = fs::read_to_string(dir.path().join(".gitignore")).expect("gitignore");
+        assert!(text.lines().any(|line| line.trim() == "/.loom/*"));
+        assert!(text.lines().any(|line| line.trim() == "!/.loom/specs/"));
+        assert!(text.lines().any(|line| line.trim() == ".worktrees/"));
+        assert!(!text.lines().any(|line| line.trim() == ".loom/"));
+
+        // Second run is a no-op.
+        let again = project.init(false).expect("init");
+        assert!(!again.gitignore_updated);
+    }
+
+    #[test]
+    fn init_migrates_legacy_gitignore() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(dir.path().join(".git")).expect("fake .git");
+        fs::write(
+            dir.path().join(".gitignore"),
+            "target/\n/.loom/\n.worktrees/\n",
+        )
+        .expect("write");
+
+        let project = Project::at(dir.path());
+        let report = project.init(false).expect("init");
+        assert!(report.gitignore_updated);
+
+        let text = fs::read_to_string(dir.path().join(".gitignore")).expect("gitignore");
+        assert!(text.lines().any(|line| line.trim() == "target/"));
+        assert!(!text.lines().any(|line| line.trim() == "/.loom/"));
+        assert!(text.lines().any(|line| line.trim() == "/.loom/*"));
+        // `.worktrees/` must not be duplicated.
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.trim() == ".worktrees/")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn init_removes_residual_legacy_rule() {
+        // A previous migration appended the block but left the shadowing
+        // whole-dir rule in place; the negations were inert until this runs.
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(dir.path().join(".git")).expect("fake .git");
+        fs::write(
+            dir.path().join(".gitignore"),
+            "/.loom/\n# loom: contract layer tracked, state layer ignored (whitelist)\n/.loom/*\n!/.loom/README.md\n",
+        )
+        .expect("write");
+
+        let project = Project::at(dir.path());
+        let report = project.init(false).expect("init");
+        assert!(report.gitignore_updated);
+
+        let text = fs::read_to_string(dir.path().join(".gitignore")).expect("gitignore");
+        assert!(!text.lines().any(|line| line.trim() == "/.loom/"));
+        assert!(text.lines().any(|line| line.trim() == "/.loom/*"));
     }
 }

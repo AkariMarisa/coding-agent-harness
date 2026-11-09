@@ -532,6 +532,7 @@ dependencies = [
  "loom-adapter",
  "loom-context",
  "loom-core",
+ "loom-native",
  "loom-store",
  "loom-tools",
  "serde",
