@@ -125,11 +125,11 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 | 指标 | 类型 | 定义 |
 |---|---|---|
-| `rewrite_output_tokens` | 实际 | 含整文件重写的 step 的 output tokens；一个 step 多个调用时按 payload 占比分摊，标 `shared` |
-| `history_carry_tokens` | 估算 | 旧 payload 若不被投影，会在后续 N 步被重发的 token 数；投影后实际 carry 接近 0 |
-| `avoided_input_tokens` | 估算 | 步骤级投影实际省下的 input tokens |
-| `retry_tokens` | 实际 | 因 churn 触发的 acceptance 回灌 / 重启额外消耗 |
-| `wasted_tokens_est` | 估算 | `rewrite_output_tokens + history_carry_tokens + retry_tokens` |
+| `rewrite_output_tokens` | 估算 | 重复整文件写入的 payload；按 `bytes / 4` 估，一个 step 多调用目前不细分 `shared` |
+| `history_carry_tokens` | 估算 | 旧 payload 若不被投影，会在后续 N 步被重发的 token 数：`payload × 剩余步数` |
+| `avoided_input_tokens` | 估算 | 步骤级投影实际省下的 input tokens：每步 `(history_bytes − projected_bytes) / 4` |
+| `retry_tokens` | 实际 | 因 churn 触发的 acceptance 回灌 / 重启额外消耗（**未接线**，暂不并入 waste） |
+| `wasted_tokens_est` | 估算 | `max(0, rewrite_output_tokens + history_carry_tokens − avoided_input_tokens)` |
 | `wasted_cost_usd_est` | 估算 | 按模型价格表计算；价格未知标 `unknown`，不要猜 |
 | `write_passes` / `churn_ratio` / `oscillations` | 诊断 | 用于解释“为什么贵”，不作为 KPI |
 
@@ -148,7 +148,7 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 明确：**L2 不是主手段**。它的价值是“防止下一次全文进入历史”，而不是“省下这一次写入”。如果 L2 让模型反复重试，应该回退到 L1/L3。
 
-> **实现状态（2026-11-08，杠杆 A 已落地）**：步骤级投影在 `loom-native` 实现——
+> **实现状态（2026-11-09，杠杆 A/B/C 已落地）**：步骤级投影在 `loom-native` 实现——
 > `src/crates/loom-native/src/project.rs`。规则：动态尾部（system+packet 之后）
 > 超过 `LOOM_NATIVE_HISTORY_BYTES`（默认 24KB，0 关闭）且预估节省 ≥
 > `LOOM_NATIVE_MIN_CLEAR`（默认 2000 tokens）时，把旧 assistant 的大
@@ -160,8 +160,26 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 > 阈值按“完整历史”单调判定，不会抖动）。
 > 离线验证：6 个单测 + `scripts/smoke-churn.sh`（EARLY 输出被投影、LATE 保留）；
 > `smoke.sh` / `smoke-native.sh` / `smoke-parallel.sh` 回归全绿。
-> **未做**：杠杆 B（patch-first / write 守卫）、杠杆 C（token 归因、`churn.json`、
-> `loom churn stats`）、L1–L3 干预阶梯。
+>
+> 杠杆 B（patch-first / write 守卫）与 C（token 归因）同日落地：
+> - `write` 默认 `mode=create`，覆盖已存在文件必须显式 `mode=replace`，
+>   单次内容上限 64KB；重复覆盖在 observation 里提示“prefer edit”；
+> - `edit` 未命中时返回“read 精确区间、复制当前文本、不要整文件重写”，
+>   不再把模型推向全文重写；
+> - 每步 usage 行带 `step` / `tool_names` / `write_paths` / `rewrite_count` /
+>   `history_bytes` / `projected_bytes`，`model` 与 `model_id` 分开记录；
+> - 每次 native run 写 `logs/churn.json`（标 `estimated: true`），
+>   `loom churn stats [--by model]` 第一屏 token/成本，第二屏写次数；
+> - `scripts/smoke-native.sh` 校验 churn 文件与聚合命令。
+>
+> 真实 A/B（官方 `deepseek-flash`，同一 fixture，`scripts/ab-churn.sh`）：
+> 完整历史约 16–17KB 时，关投影每步 5.2–5.4k input，开投影 2.3–2.5k
+> （−46%–55%）；单步 token 3,906 → 2,955、单步成本 −29%。样本 n=1，
+> 只证明机制；数字与口径见 `doc/16` §8.8。
+>
+> **未做**：L1–L3 干预阶梯（自动投影已有，但“第 N 次重写触发”的阈值动作、
+> 成本感知重启尚未接线）；`retry_tokens` 仍只按 acceptance 回灌诊断，
+> 未并入 `wasted_tokens_est`；多调用步的 `shared` 分摊未细分。
 
 ### 1.6 外部 adapter
 
@@ -197,7 +215,14 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 ### 2.1 现状（这是一个正确性缺陷 + 一个可见性缺陷）
 
-当前链路：
+> **实现状态（2026-11-09，正确性缺陷已修）**：`TaskStatus::NeedsInput` +
+> `task.needs_input` 事件已接入；`loom verify` 在验收全过时保留 adapter 的
+> claim 状态（`needs_input` / `blocked` / `budget_exceeded` 不再写成
+> `task.failed`），`dispatch` 接受 `needs_input` 重新派发，看板新增
+> `needs_input` 列。M3 升级计数因此不再被提问污染。可见性部分（attention
+> inbox）仍未做，见 §2.2。
+
+当前链路（修复前）：
 
 1. adapter 退出码 `2`，回执状态 `needs_input`；
 2. `loom verify` 只把 `ReceiptStatus::Done` 当作 `claim_done`；
