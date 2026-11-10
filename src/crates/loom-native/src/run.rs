@@ -5,6 +5,7 @@
 //! `report.md`, and `usage.jsonl` into the outbox. Verification stays with
 //! `loom verify`; this process only produces a claim plus evidence.
 
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -238,6 +239,9 @@ pub fn run(
     let mut usage = Usage::default();
     let mut steps = 0u32;
     let mut idle = 0u32;
+    // (acceptance cmd, exit) pairs already observed: re-running the same check
+    // is not progress, a changed result is (`doc/08` §5: "无 diff/无 verify 进展").
+    let mut seen_verify: HashSet<(String, i32)> = HashSet::new();
     let mut verify_rounds = 0u32;
     let mut verify = skip_verify(&spec);
     let mut finished: Option<Finish> = None;
@@ -337,6 +341,7 @@ pub fn run(
 
         messages.push(message);
         let mut mutated = false;
+        let mut verified = false;
         let mut finish_call: Option<ToolCall> = None;
         let write_mark = toolbox.write_log().len();
         for call in &calls {
@@ -350,6 +355,13 @@ pub fn run(
             let observation = match toolbox.execute(&call.name, &call.arguments) {
                 Ok(result) => {
                     mutated |= result.mutated;
+                    if call.name == "bash" {
+                        if let Some(signature) =
+                            acceptance_evidence(&spec, &call.arguments, &result.observation)
+                        {
+                            verified |= seen_verify.insert(signature);
+                        }
+                    }
                     result.observation
                 }
                 Err(error) => format!("tool error: {error:#}"),
@@ -404,13 +416,16 @@ pub fn run(
             break;
         }
 
-        if mutated {
+        // Progress is evidence, not mutation: a file change or a *new*
+        // acceptance result (cmd, exit) both count. Pure inspection loops
+        // still trip the watchdog (`doc/08` §5).
+        if mutated || verified {
             idle = 0;
         } else {
             idle += 1;
             if idle >= config.max_idle_steps {
                 finished = Some(Finish::blocked(format!(
-                    "no file changes for {idle} consecutive steps"
+                    "no file changes or new verification evidence for {idle} consecutive steps"
                 )));
                 break;
             }
@@ -1086,6 +1101,39 @@ fn write_report(
     Ok(())
 }
 
+/// Evidence produced by a step: a bash run of one of the task's acceptance
+/// commands, deduplicated by (command, exit). First observation counts, a
+/// replayed check does not; a changed exit code does.
+fn acceptance_evidence(
+    spec: &TaskSpec,
+    arguments: &str,
+    observation: &str,
+) -> Option<(String, i32)> {
+    let args: Value = serde_json::from_str(arguments).ok()?;
+    let executed = normalize_ws(args.get("cmd")?.as_str()?);
+    let exit = bash_exit(observation)?;
+    spec.acceptance
+        .iter()
+        .map(|item| normalize_ws(&item.cmd))
+        .find(|want| !want.is_empty() && executed.contains(want.as_str()))
+        .map(|want| (want, exit))
+}
+
+/// The bash tool observation starts with `$ <cmd>` then `exit=<n> ...`.
+fn bash_exit(observation: &str) -> Option<i32> {
+    observation.lines().find_map(|line| {
+        line.strip_prefix("exit=")?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    })
+}
+
+fn normalize_ws(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn git_head(worktree: &Path) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
@@ -1428,5 +1476,102 @@ mod tests {
         let outcome = run(&request, &mut provider, Some(config)).expect("run");
         assert_eq!(outcome.status, "budget_exceeded");
         assert_eq!(outcome.exit_code, 3);
+    }
+
+    /// Progress is evidence: a step that runs an acceptance command resets the
+    /// watchdog even without file changes. Under mutation-only accounting the
+    /// run would be blocked at step 6, before reaching finish.
+    #[test]
+    fn acceptance_evidence_extends_the_idle_budget() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let mut spec = read_spec(&request.packet_dir).expect("spec");
+        spec.acceptance = vec![loom_core::Acceptance {
+            id: "A1".into(),
+            cmd: "echo evidence-probe".into(),
+            expect_exit: 0,
+            timeout_s: 10,
+        }];
+        fs::write(
+            request.packet_dir.join("task.json"),
+            serde_json::to_string_pretty(&spec).unwrap(),
+        )
+        .expect("task");
+
+        let mut steps = json!([{
+            "tool_calls": [{"name": "bash", "arguments": {"cmd": "echo evidence-probe"}}],
+            "usage": {"input_tokens": 100, "output_tokens": 10}
+        }]);
+        for n in 1..=5 {
+            steps.as_array_mut().expect("array").push(json!({
+                "tool_calls": [{"name": "bash", "arguments": {"cmd": format!("echo idle-{n}")}}],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }));
+        }
+        steps.as_array_mut().expect("array").push(json!({
+            "tool_calls": [{"name": "finish", "arguments": {"status": "done", "summary": "verified"}}],
+            "usage": {"input_tokens": 100, "output_tokens": 10}
+        }));
+
+        let mut provider = ScriptedProvider::parse(&steps.to_string()).expect("script");
+        let mut config = NativeConfig::from_spec(
+            &read_spec(&request.packet_dir).expect("spec"),
+            request.timeout_s,
+        );
+        config.max_steps = 10;
+        let outcome = run(&request, &mut provider, Some(config)).expect("run");
+        assert_eq!(outcome.status, "done", "{outcome:?}");
+        assert_eq!(outcome.exit_code, 0);
+    }
+
+    /// Bash that is not an acceptance command still counts as idle: the
+    /// evidence rule must not become a free "run echo forever" pass.
+    #[test]
+    fn non_acceptance_bash_still_trips_the_watchdog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let mut steps = serde_json::Value::Array(vec![]);
+        for n in 1..=6 {
+            steps.as_array_mut().expect("array").push(json!({
+                "tool_calls": [{"name": "bash", "arguments": {"cmd": format!("echo idle-{n}")}}],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }));
+        }
+        let mut provider = ScriptedProvider::parse(&steps.to_string()).expect("script");
+        let mut config = NativeConfig::from_spec(
+            &read_spec(&request.packet_dir).expect("spec"),
+            request.timeout_s,
+        );
+        config.max_steps = 10;
+        let outcome = run(&request, &mut provider, Some(config)).expect("run");
+        assert_eq!(outcome.status, "blocked", "{outcome:?}");
+        assert_eq!(outcome.exit_code, 2);
+    }
+
+    #[test]
+    fn acceptance_evidence_matches_bash_observations() {
+        let spec = TaskSpec {
+            acceptance: vec![loom_core::Acceptance {
+                id: "A1".into(),
+                cmd: "grep -q foo file.txt".into(),
+                expect_exit: 0,
+                timeout_s: 5,
+            }],
+            ..TaskSpec::default()
+        };
+        let observation = "$ grep -q foo file.txt\nexit=0 timed_out=false duration=0.01s\n";
+        assert_eq!(
+            acceptance_evidence(&spec, r#"{"cmd":"grep -q foo file.txt"}"#, observation),
+            Some(("grep -q foo file.txt".to_string(), 0))
+        );
+        // A changed exit code is a different signature (still evidence).
+        let failed = "$ grep -q foo file.txt\nexit=1 timed_out=false duration=0.01s\n";
+        assert_eq!(
+            acceptance_evidence(&spec, r#"{"cmd":"grep -q foo file.txt"}"#, failed),
+            Some(("grep -q foo file.txt".to_string(), 1))
+        );
+        // Non-acceptance bash and observations without an exit line yield nothing.
+        assert!(acceptance_evidence(&spec, r#"{"cmd":"echo hi"}"#, observation).is_none());
+        assert!(bash_exit("no exit line here").is_none());
     }
 }

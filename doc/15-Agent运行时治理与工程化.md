@@ -64,7 +64,7 @@ churn 的浪费不在磁盘，而在**请求历史**。一次“删除后重写�
 | `write` 不要求先 `read`，也不限制整文件覆盖 | 模型可以随时用全文重写替代 patch |
 | `edit` 匹配失败时只返回错误 | 模型容易放弃 edit，转成整文件重写 |
 | 只有 run 级 usage，没有 step 级归因 | 无法回答“这次重写多花了多少 token” |
-| no-progress 只看 `mutated` | 重写也算“有进展”，不会触发任何收敛 |
+| no-progress 只看 `mutated` | 2026-11-11 起新增 acceptance 证据信号（(cmd,exit) 去重后计入进展）；重写仍算“有进展”，不会触发任何收敛 |
 
 相关实现：`src/crates/loom-native/src/run.rs`（`messages.push` / `provider.complete`）、`src/crates/loom-native/src/tools.rs`（`write` / `edit`）、`src/crates/loom-store/src/telemetry.rs`。
 
