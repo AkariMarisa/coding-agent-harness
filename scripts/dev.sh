@@ -72,6 +72,17 @@ for name in LOOM_TARGET_REPO LOOM_ANDROID_SDK LOOM_JAVA_HOME LOOM_GRADLE_HOME; d
     fi
 done
 
+# Extra project dirs, mounted at their original paths (colon-separated), for
+# repos outside this one: LOOM_EXTRA_DIRS=/path/a:/path/b.
+if [[ -n "${LOOM_EXTRA_DIRS:-}" ]]; then
+    IFS=':' read -ra extra_dirs <<< "$LOOM_EXTRA_DIRS"
+    for dir in "${extra_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            ENVS+=(-v "$dir:$dir:Z")
+        fi
+    done
+fi
+
 # Maven local cache (Robolectric downloads android-all into ~/.m2 at test
 # time). HOME must point at its parent so `user.home/.m2` resolves there.
 if [[ -n "${LOOM_MAVEN_HOME:-}" && -d "$LOOM_MAVEN_HOME" ]]; then

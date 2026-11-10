@@ -148,6 +148,7 @@ pub struct OpenAiProvider {
     api_key: String,
     timeout: Duration,
     wire: Wire,
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiProvider {
@@ -178,6 +179,7 @@ impl OpenAiProvider {
             api_key,
             timeout: Duration::from_secs(timeout_from_env()),
             wire,
+            reasoning_effort: capability.and_then(|capability| capability.reasoning_effort.clone()),
         })
     }
 
@@ -249,7 +251,7 @@ impl Provider for OpenAiProvider {
     fn complete(&mut self, request: &ChatRequest) -> Result<ChatResponse> {
         let body = match self.wire {
             Wire::Messages => build_messages_body(request),
-            _ => build_chat_body(request),
+            _ => augment_chat_body(build_chat_body(request), self.reasoning_effort.as_deref()),
         };
         // Bodies carry no credentials (the key travels in the header), so a
         // debug dump is safe to keep next to the run logs.
@@ -322,6 +324,15 @@ pub fn build_chat_body(request: &ChatRequest) -> Value {
         "max_tokens": request.max_tokens,
         "temperature": request.temperature,
     })
+}
+
+/// Chat-wire reasoning effort (`reasoning_effort` param). The messages wire
+/// (Anthropic shape) has no equivalent, so it is left untouched.
+fn augment_chat_body(mut body: Value, reasoning_effort: Option<&str>) -> Value {
+    if let (Some(effort), Some(object)) = (reasoning_effort, body.as_object_mut()) {
+        object.insert("reasoning_effort".to_string(), json!(effort));
+    }
+    body
 }
 
 /// Chat-wire message shape. `ChatMessage` is wire-neutral, so tool calls are
@@ -995,6 +1006,21 @@ mod tests {
         .expect("resolve");
         assert_eq!(base, "https://relay.example.com/v1");
         assert_eq!(key, "sk-relay");
+    }
+
+    #[test]
+    fn chat_body_carries_reasoning_effort_only_when_set() {
+        let request = ChatRequest {
+            model: "m".into(),
+            messages: vec![ChatMessage::user("hi")],
+            tools: json!([]),
+            max_tokens: 10,
+            temperature: 0.0,
+        };
+        let with_effort = augment_chat_body(build_chat_body(&request), Some("high"));
+        assert_eq!(with_effort["reasoning_effort"], json!("high"));
+        let without = augment_chat_body(build_chat_body(&request), None);
+        assert!(without.get("reasoning_effort").is_none());
     }
 
     #[test]

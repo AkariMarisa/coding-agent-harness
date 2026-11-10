@@ -185,8 +185,10 @@ fn merge_value(base: &mut toml::Value, local: toml::Value) {
     }
 }
 
-/// `[[models]]` merges by `alias`: a local entry with the same alias replaces
-/// the base one, new aliases are appended, unrelated entries are untouched.
+/// `[[models]]` merges by `alias`: a local entry with the same alias overlays
+/// its fields onto the base entry (tables merge, scalars replace), new aliases
+/// are appended, unrelated entries are untouched. An effort-only local entry
+/// therefore does not need to repeat the base URL.
 fn merge_models(base: &mut toml::Value, local: toml::Value) {
     let local_entries = match local {
         toml::Value::Array(entries) => entries,
@@ -202,10 +204,18 @@ fn merge_models(base: &mut toml::Value, local: toml::Value) {
             return;
         }
     };
-    let local_aliases: HashSet<String> = local_entries.iter().filter_map(entry_alias).collect();
-    base_entries
-        .retain(|entry| !entry_alias(entry).is_some_and(|alias| local_aliases.contains(&alias)));
-    base_entries.extend(local_entries);
+    for local_entry in local_entries {
+        match entry_alias(&local_entry) {
+            Some(alias) => match base_entries
+                .iter_mut()
+                .position(|entry| entry_alias(entry).as_deref() == Some(alias.as_str()))
+            {
+                Some(index) => merge_value(&mut base_entries[index], local_entry),
+                None => base_entries.push(local_entry),
+            },
+            None => base_entries.push(local_entry),
+        }
+    }
 }
 
 fn entry_alias(entry: &toml::Value) -> Option<String> {
@@ -266,6 +276,7 @@ tier = "worker"
 alias = "b"
 model_id = "model-b-base"
 tier = "worker"
+base_url = "https://base.example/v1"
 
 [routing.fallbacks]
 worker = ["b"]
@@ -300,6 +311,10 @@ tier = "worker"
             .map(|model| model.model_id.as_deref().unwrap_or_default())
             .collect();
         assert_eq!(ids, ["model-a", "model-b-local", "model-c"]);
+        // Field-level merge: `b`'s local entry only sets model_id, so the base
+        // entry's base_url survives the overlay.
+        let b = config.model("b").expect("b");
+        assert_eq!(b.base_url.as_deref(), Some("https://base.example/v1"));
         // Deep merge keeps base routing that local did not mention.
         assert_eq!(config.routing.fallbacks["worker"], ["b"]);
         config.validate().expect("valid");

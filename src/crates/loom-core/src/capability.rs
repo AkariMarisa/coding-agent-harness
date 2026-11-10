@@ -159,6 +159,11 @@ pub struct ModelCapability {
     pub tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streaming: Option<bool>,
+    /// Chat-wire reasoning effort (`minimal`/`low`/`medium`/`high`), sent as
+    /// `reasoning_effort` on chat completions only. Anthropic-style `messages`
+    /// wire has no equivalent and ignores this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_usd_per_mtok: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -228,6 +233,14 @@ impl ModelCapability {
             if !valid {
                 return Err(format!(
                     "{}: key_env must be an environment variable name like DEEPSEEK_API_KEY",
+                    self.alias
+                ));
+            }
+        }
+        if let Some(effort) = self.reasoning_effort.as_deref() {
+            if !matches!(effort, "minimal" | "low" | "medium" | "high") {
+                return Err(format!(
+                    "{}: reasoning_effort must be one of minimal|low|medium|high, got {effort:?}",
                     self.alias
                 ));
             }
@@ -339,6 +352,19 @@ mod tests {
 
         model.key_env = Some("1LEADING_DIGIT".into());
         assert!(model.validate().is_err());
+    }
+
+    #[test]
+    fn validates_reasoning_effort() {
+        let mut model = ModelCapability::new("worker", Tier::Worker);
+        model.reasoning_effort = Some("high".into());
+        assert!(model.validate().is_ok());
+
+        model.reasoning_effort = Some("maximum".into());
+        assert!(
+            model.validate().is_err(),
+            "unknown effort level is rejected"
+        );
     }
 
     #[test]
