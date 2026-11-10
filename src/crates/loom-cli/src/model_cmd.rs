@@ -187,6 +187,13 @@ pub fn init(project: &Project, yes: bool, format: Format) -> Result<i32> {
     let block = render_block(&drafts)?;
     let written: Vec<String> = drafts.iter().map(|draft| draft.alias.clone()).collect();
 
+    let total = config.models.len() + drafts.len();
+    if total >= 2 {
+        eprintln!(
+            "tip: {total} models configured → [routing.fallbacks] enables same-tier failover; `loom route` explains the result"
+        );
+    }
+
     // Preview (non-TTY without --yes): never write without being asked.
     if !interactive && !yes {
         match format {

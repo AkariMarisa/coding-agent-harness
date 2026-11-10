@@ -27,10 +27,11 @@ pub const LOOM_README: &str = "\
 | 层 | 路径 | git |
 |---|---|---|
 | 契约层 | `README.md`、`goal.md`、`constraints.md`、`specs/` | tracked |
-| 状态层 | `tasks/`、`runs/`、`ledger/`、`snapshots/`、`locks/`、`config.toml`、`events.jsonl` 等其余全部 | ignored |
+| 状态层 | `tasks/`、`runs/`、`ledger/`、`snapshots/`、`locks/`、`config.toml`、`config.local.toml`、`events.jsonl` 等其余全部 | ignored |
 
 - 契约层：人与控制面共同维护，走 git review；`loom goal` / `loom constraints` 起草，人审 diff；模块契约放 `specs/`。
 - 状态层：orchestrator 唯一写者；事件日志 append-only，不要手改事实源。
+- 本地实验配置写 `config.local.toml`（深合并覆盖 `config.toml`，`[[models]]` 按 alias 合并；永不提交，测试不碰主文件）。
 - ⚠️ `rm -rf .loom/` 会连契约层一起删（tracked 可从 git 恢复），状态层不可恢复。
 - 分层规则见仓库 `AGENTS.md` §6。
 ";
@@ -81,8 +82,14 @@ impl Project {
         self.loom_dir().join("config.toml")
     }
 
+    /// Local experiment overlay: deep-merged over `config.toml`, never
+    /// committed (it stays in the ignored state layer).
+    pub fn config_local_path(&self) -> PathBuf {
+        self.loom_dir().join("config.local.toml")
+    }
+
     pub fn load_config(&self) -> Result<Config> {
-        Config::load(&self.config_path()).map_err(Into::into)
+        Config::load_with_local(&self.config_path(), &self.config_local_path()).map_err(Into::into)
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
@@ -286,6 +293,29 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn load_config_applies_local_overlay() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project::at(dir.path());
+        project.init(false).expect("init");
+        fs::write(
+            project.config_path(),
+            "[[models]]\nalias = \"base\"\nmodel_id = \"m1\"\ntier = \"worker\"\n",
+        )
+        .expect("write base");
+        fs::write(
+            project.config_local_path(),
+            "[[models]]\nalias = \"base\"\nmodel_id = \"m2\"\ntier = \"worker\"\n",
+        )
+        .expect("write local");
+
+        let config = project.load_config().expect("load");
+        assert_eq!(config.models.len(), 1);
+        assert_eq!(config.models[0].model_id.as_deref(), Some("m2"));
+        // The overlay lives in the ignored state layer.
+        assert!(project.config_local_path().is_file());
     }
 
     #[test]

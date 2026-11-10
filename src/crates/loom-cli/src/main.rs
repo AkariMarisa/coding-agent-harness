@@ -1361,10 +1361,15 @@ fn doctor(project: &Project) -> Result<i32> {
                 "config",
                 true,
                 &format!(
-                    "lang={} call={}B models={}",
+                    "lang={} call={}B models={}{local}",
                     config.lang,
                     config.tools.limits.call_bytes,
-                    config.models.len()
+                    config.models.len(),
+                    local = if project.config_local_path().exists() {
+                        " (+local)"
+                    } else {
+                        ""
+                    }
                 ),
             ),
             Err(error) => check("config", false, &error.to_string()),
