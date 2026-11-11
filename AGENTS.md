@@ -160,4 +160,8 @@ make check
 - 多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。
 - 运行时治理与工程化（已实现：步骤级上下文投影 `loom-native/src/project.rs` + `scripts/smoke-churn.sh`，patch-first/write 守卫，步骤级 token 归因 + `logs/churn.json` + `loom churn stats`；仍待做——L1–L3 分级干预、`questions.json` + attention inbox、skills 扫描/按需加载/验证晋升、agent/harness 驱动的本地 CI 与 hooks/review/attestation——见 `doc/15-Agent运行时治理与工程化.md`）。
 
+**方向记录（未设计）**：
+
+- 工作区开发环境隔离：Windows/Linux/macOS 三平台、A+B 层无虚拟化、复用 `.mise.toml` 等既有声明、容器降级为可选 profile；不做通用环境管理器。见 `doc/17-工作区开发环境隔离.md`。
+
 **不要提前做**：embedding/向量库、MCP、跨项目知识库、自动规划、并行调度、把成员仓库合并成 monorepo。
