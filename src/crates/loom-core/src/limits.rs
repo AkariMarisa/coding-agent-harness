@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Soft defaults are configurable down. Hard caps are compiled in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Limits {
     pub call_bytes: usize,
     pub invocation_bytes: usize,

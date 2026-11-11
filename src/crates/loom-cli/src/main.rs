@@ -22,6 +22,7 @@ use loom_tools::{
 mod adapter_cmd;
 mod board_cmd;
 mod churn_cmd;
+mod config_cmd;
 mod context_cmd;
 mod dispatch_cmd;
 mod event_cmd;
@@ -103,6 +104,11 @@ enum Command {
     Model {
         #[command(subcommand)]
         command: ModelCommand,
+    },
+    /// Read or edit .loom/config.toml (comment-preserving, validated).
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
     /// Show project and run summary.
     Status,
@@ -258,6 +264,26 @@ enum ModelCommand {
         /// Write detected defaults without prompting (non-TTY without it is preview-only).
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Show the effective value at a dotted path (base + local overlay).
+    Get {
+        /// Dotted path, e.g. `lang`, `routing.roles.review`, `models.gpt.reasoning_effort`.
+        path: String,
+    },
+    /// Set a value in .loom/config.toml (comments and key order are preserved).
+    Set {
+        /// Dotted path, e.g. `parallel.max_running`, `routing.fallbacks.worker`.
+        path: String,
+        /// Scalar (`true`, `4`, `0.3`), JSON array (`["a"]`), or string;
+        /// quote to force a string (`'"123"'`).
+        value: String,
+        /// Edit .loom/config.local.toml instead (local experiments, never committed).
+        #[arg(long)]
+        local: bool,
     },
 }
 
@@ -537,6 +563,12 @@ fn run(cli: Cli) -> Result<i32> {
         ),
         Command::Model { command } => match command {
             ModelCommand::Init { yes } => model_cmd::init(&project, yes, cli.format),
+        },
+        Command::Config { command } => match command {
+            ConfigCommand::Get { path } => config_cmd::get(&project, &path, cli.format),
+            ConfigCommand::Set { path, value, local } => {
+                config_cmd::set(&project, &path, &value, local, cli.format)
+            }
         },
         Command::Status => status(&project),
         Command::Board => board_cmd::board(&project, cli.format),

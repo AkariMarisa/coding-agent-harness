@@ -9,7 +9,7 @@ use crate::routing::RoutingConfig;
 use crate::{Limits, ModelCapability};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub lang: String,
     pub tools: ToolsConfig,
@@ -56,7 +56,7 @@ impl Default for Config {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ToolsConfig {
     pub limits: Limits,
 }
@@ -146,6 +146,136 @@ impl Config {
 
     pub fn to_toml(&self) -> Result<String, ConfigError> {
         toml::to_string_pretty(self).map_err(ConfigError::Serialize)
+    }
+}
+
+/// Rewrite a config document at a dotted path, preserving comments and key
+/// order (toml_edit). `models.<alias>.<field>` addresses `[[models]]` entries
+/// by alias; every other path walks or creates tables. This is text-level
+/// editing only: the caller round-trips the result through `Config::load*` so
+/// schema validation (including `deny_unknown_fields`) rejects typos before
+/// anything is committed.
+pub fn apply_config_set(text: &str, path: &str, raw: &str) -> Result<String, String> {
+    let parsed = parse_config_value(raw)?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|error| format!("parse config: {error}"))?;
+
+    let parts: Vec<&str> = path.split('.').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    if parts[0] == "models" {
+        if parts.len() != 3 {
+            return Err("models path must be models.<alias>.<field>".to_string());
+        }
+        set_model_field(&mut doc, parts[1], parts[2], parsed)?;
+        return Ok(doc.to_string());
+    }
+
+    let (key, parents) = parts.split_last().expect("parts is not empty");
+    let mut table: &mut toml_edit::Table = doc.as_table_mut();
+    for (index, segment) in parents.iter().enumerate() {
+        let slot = table
+            .entry(segment)
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        match slot {
+            toml_edit::Item::Table(nested) => table = nested,
+            _ => return Err(format!("{} is not a table", parents[..=index].join("."))),
+        }
+    }
+    table[*key] = parsed;
+    Ok(doc.to_string())
+}
+
+fn set_model_field(
+    doc: &mut toml_edit::DocumentMut,
+    alias: &str,
+    field: &str,
+    parsed: toml_edit::Item,
+) -> Result<(), String> {
+    let Some(item) = doc.get_mut("models") else {
+        return Err("no [[models]] in config; run `loom model init` first".to_string());
+    };
+    let Some(models) = item.as_array_of_tables_mut() else {
+        return Err("models is not an array of tables".to_string());
+    };
+    let mut aliases = Vec::new();
+    for table in models.iter_mut() {
+        let entry_alias = table
+            .get("alias")
+            .and_then(|item| item.as_value())
+            .and_then(|value| value.as_str());
+        aliases.push(entry_alias.unwrap_or("?").to_string());
+        if entry_alias == Some(alias) {
+            table[field] = parsed;
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "model alias {alias} not found; configured: {}",
+        aliases.join(", ")
+    ))
+}
+
+/// Parse a CLI value: booleans, integers, finite floats, JSON arrays of
+/// scalars, quoted strings (force string semantics), otherwise plain string.
+pub fn parse_config_value(raw: &str) -> Result<toml_edit::Item, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("value is empty".to_string());
+    }
+    if trimmed.starts_with('"') {
+        let text: String = serde_json::from_str(trimmed)
+            .map_err(|error| format!("quoted value must be a valid JSON string: {error}"))?;
+        return Ok(toml_edit::value(text));
+    }
+    match trimmed {
+        "true" => return Ok(toml_edit::value(true)),
+        "false" => return Ok(toml_edit::value(false)),
+        _ => {}
+    }
+    if let Ok(int) = trimmed.parse::<i64>() {
+        return Ok(toml_edit::value(int));
+    }
+    if let Ok(float) = trimmed.parse::<f64>() {
+        if float.is_finite() {
+            return Ok(toml_edit::value(float));
+        }
+    }
+    if trimmed.starts_with('[') {
+        let elements: Vec<serde_json::Value> = serde_json::from_str(trimmed)
+            .map_err(|error| format!("array must look like [\"a\", \"b\"]: {error}"))?;
+        let mut array = toml_edit::Array::new();
+        for element in elements {
+            array.push(json_scalar(element)?);
+        }
+        return Ok(toml_edit::Item::Value(toml_edit::Value::Array(array)));
+    }
+    if trimmed.starts_with('{') {
+        return Err("object values are not supported; set a dotted path instead".to_string());
+    }
+    Ok(toml_edit::value(trimmed.to_string()))
+}
+
+fn json_scalar(element: serde_json::Value) -> Result<toml_edit::Value, String> {
+    let item = match element {
+        serde_json::Value::String(text) => toml_edit::value(text),
+        serde_json::Value::Bool(flag) => toml_edit::value(flag),
+        serde_json::Value::Number(number) => {
+            if let Some(int) = number.as_i64() {
+                toml_edit::value(int)
+            } else if let Some(float) = number.as_f64() {
+                toml_edit::value(float)
+            } else {
+                return Err("array numbers must be i64 or f64".to_string());
+            }
+        }
+        _ => return Err("arrays may only contain strings, numbers, or booleans".to_string()),
+    };
+    match item {
+        toml_edit::Item::Value(value) => Ok(value),
+        other => Err(format!("unexpected value shape: {other:?}")),
     }
 }
 
@@ -346,6 +476,125 @@ tier = "worker"
 
         let error = Config::load_with_local(&base, &local).expect_err("must fail");
         assert!(matches!(&error, ConfigError::Parse { path, .. } if path == &local));
+    }
+
+    #[test]
+    fn config_set_preserves_comments_and_order() {
+        let text = "# keep me\nlang = \"en-US\"\n\n[parallel]\nmax_running = 2\nmax_inflight_cost_usd = 0.5\n";
+        let out = apply_config_set(text, "parallel.max_running", "4").expect("set");
+        assert!(out.contains("# keep me"), "comment survives: {out}");
+        assert!(
+            out.contains("lang = \"en-US\""),
+            "key order survives: {out}"
+        );
+        assert!(out.contains("max_running = 4"), "value lands: {out}");
+        let config: Config = toml::from_str(&out).expect("parse");
+        assert_eq!(config.parallel.max_running, 4);
+        assert_eq!(config.lang, "en-US");
+    }
+
+    #[test]
+    fn config_set_creates_missing_tables() {
+        let out = apply_config_set("lang = \"zh-CN\"\n", "routing.roles.review", "frontier")
+            .expect("set");
+        let config: Config = toml::from_str(&out).expect("parse");
+        assert_eq!(config.routing.roles["review"], Tier::Frontier);
+    }
+
+    #[test]
+    fn config_set_addresses_models_by_alias() {
+        let text = r#"
+[[models]]
+alias = "a"
+tier = "worker"
+base_url = "https://a.example"
+
+[[models]]
+alias = "b"
+tier = "worker"
+base_url = "https://b.example"
+"#;
+        let out = apply_config_set(text, "models.b.reasoning_effort", "high").expect("set");
+        let config: Config = toml::from_str(&out).expect("parse");
+        let b = config.model("b").expect("b");
+        assert_eq!(b.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            b.base_url.as_deref(),
+            Some("https://b.example"),
+            "untouched fields survive"
+        );
+        assert!(config.model("a").expect("a").reasoning_effort.is_none());
+
+        let missing = apply_config_set(text, "models.ghost.reasoning_effort", "high")
+            .expect_err("alias must exist");
+        assert!(missing.contains("ghost"), "{missing}");
+        assert!(missing.contains("configured: a, b"), "{missing}");
+        assert!(
+            apply_config_set(text, "models.b", "x").is_err(),
+            "alias-only path rejected"
+        );
+    }
+
+    #[test]
+    fn config_set_value_shapes() {
+        // Item renders as TOML, which sidesteps Formatted<> internals.
+        assert_eq!(
+            parse_config_value("true").expect("bool").to_string(),
+            "true"
+        );
+        assert_eq!(parse_config_value("4").expect("int").to_string(), "4");
+        assert_eq!(parse_config_value("0.3").expect("float").to_string(), "0.3");
+        assert_eq!(
+            parse_config_value("\"123\"").expect("quoted").to_string(),
+            "\"123\"",
+            "quoted input stays a string"
+        );
+        assert_eq!(
+            parse_config_value("ja").expect("plain").to_string(),
+            "\"ja\""
+        );
+        let array = parse_config_value("[\"mimo\", \"x\"]")
+            .expect("array")
+            .to_string();
+        assert!(
+            array.starts_with('[') && array.contains("mimo") && array.contains('x'),
+            "{array}"
+        );
+        assert!(parse_config_value("{}").is_err(), "objects rejected");
+        assert!(parse_config_value("").is_err(), "empty rejected");
+        assert!(
+            parse_config_value("[\"a\", 1, true]").is_ok(),
+            "scalar mix allowed"
+        );
+        assert!(
+            parse_config_value("[{ \"a\": 1 }]").is_err(),
+            "nested objects rejected"
+        );
+    }
+
+    #[test]
+    fn unknown_keys_fail_validation_instead_of_silently_ignored() {
+        let base = "lang = \"zh-CN\"\n";
+        let typo = apply_config_set(base, "langg", "x").expect("apply");
+        assert!(
+            toml::from_str::<Config>(&typo).is_err(),
+            "top-level typo must not parse"
+        );
+        let nested = apply_config_set(base, "tools.limits.callbyes", "10").expect("apply");
+        assert!(
+            toml::from_str::<Config>(&nested).is_err(),
+            "nested typo must not parse"
+        );
+        let wrong_type = apply_config_set(base, "tools.limits.call_bytes", "fast").expect("apply");
+        assert!(
+            toml::from_str::<Config>(&wrong_type).is_err(),
+            "wrong type must not parse"
+        );
+        let bad_enum = apply_config_set(base, "routing.roles.review", "ultra").expect("apply");
+        assert!(
+            toml::from_str::<Config>(&bad_enum).is_err(),
+            "bad enum must not parse"
+        );
     }
 
     #[test]

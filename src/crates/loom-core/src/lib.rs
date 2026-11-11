@@ -15,7 +15,9 @@ mod time;
 mod usage;
 
 pub use capability::{find_model, ModelCapability, ReasoningPassthrough, ThinkingMode, Tier, Wire};
-pub use config::{Config, ConfigError, ParallelConfig, ToolsConfig};
+pub use config::{
+    apply_config_set, parse_config_value, Config, ConfigError, ParallelConfig, ToolsConfig,
+};
 pub use envelope::{
     Budget, BudgetLevel, Envelope, ErrorCode, Item, ItemKind, ItemType, Stats, ToolError, ToolName,
     PROTOCOL_VERSION,
