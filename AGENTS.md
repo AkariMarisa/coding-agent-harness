@@ -104,6 +104,8 @@ New behavior gets unit tests first; tests touching the filesystem/search use tem
 - CLI human-readable output defaults to Chinese and can be switched with `LOOM_LANG` (`en` / `ja`); this is runtime behavior, not docs.
 - Paths, symbols, and enums are never translated.
 - Model names, ports, and CLI arguments in docs are **examples/placeholders**; verify against `--help` and official docs before relying on them.
+- **Admission test**: before adding a doc, ask "if this were deleted, would someone make a wrong decision or hit the same pitfall again within three months?" Write it only when the answer is yes.
+- **ADR for irreversible decisions**: record them in `doc/adr/` (Status / Context / Decision / Consequences / Alternatives, plus a mandatory **Model assumptions** section: which model capabilities the decision depends on, and what change triggers a re-review). An accepted ADR is never edited; supersede it with a new one.
 
 ### 8.1 Answers and Writing
 
@@ -132,19 +134,7 @@ New behavior gets unit tests first; tests touching the filesystem/search use tem
 
 ## 11. Current Milestone (M0)
 
-Done / in progress:
-
-1. workspace + containerized dev environment;
-2. tool envelope + `search`/`read`/`artifact`;
-3. telemetry and the three-tier budget;
-4. model capability bits + request ledger + CPVT/TPVT/WPT;
-5. TaskSpec / event log / task index and state replay;
-6. Context Compiler (stable prefix, hard budgets, failure packets, manifest) + versioned prompt library;
-7. process-level adapter contract, mock adapter, goose/opencode presets, adapter canary;
-8. the `dispatch` / `verify` / `resume` minimal loop (mock end-to-end passing);
-9. native executor (M2 start): OpenAI-compatible tool loop, read/search/edit/write/bash, result projection to artifacts, token/wall-clock/step/cost budgets, acceptance-failure feedback, previous-run failure-packet injection, no-progress, scripted provider tests, `--adapter native` end-to-end passing.
-10. control-plane routing (M3 start): `[routing]` role→tier, verify-failure escalation, tier cost guards, worst-case cost check before dispatch, the `loom route` explain command, `loom route stats` worker share and switch counts, same-tier fallback auto-switching (`task.fallback` + a separate run); `task.escalated` and `TaskDispatched.data.route` are wired up.
-11. M4 parallelism (completed 2026-11-08): path locks (owner/lease/pid, RAII releasing only paths it wrote, dead-owner reclamation), locking in `dispatch`/`verify`, `task.blocked(code=lock_owner/parallel_cap/inflight_budget)`, `[parallel] max_running` (default 2) and `max_inflight_cost_usd`, the `loom merge` queue (global `**` lock, verify before merge, rebase, integration verify, rollback on failure, worktree/branch cleanup), the `loom board` kanban, JSONL single-writer and atomic run-id reservation; `scripts/smoke-parallel.sh` measured 10 tasks at 2 concurrent with 0 failures and 10 merges.
+Done work lives with the design docs, not here: per-subsystem implementation status is tracked in `doc/08-design-roadmap-v0.2.md` (its "implementation status" notes), protocol facts in `doc/03-core-protocols.md`, the tool envelope in `doc/10-tool-output-protocol-v0.1.md`, blockers in `doc/14-current-issues-and-blockers.md`; the detailed change history is `git log`.
 
 Next:
 
