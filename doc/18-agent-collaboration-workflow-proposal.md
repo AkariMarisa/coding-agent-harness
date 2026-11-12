@@ -64,6 +64,7 @@ What process history keeps inventing and keeps killing is ceremony (daily stand-
 | Gate | two levels: machine gate (exit code) and human gate (evidence review) | before merge |
 | Escalation | `needs_input` (implemented) + inbox + structured report (see `doc/15`, to be implemented) | anytime |
 | Account | usage / churn / route stats | retrospective per batch |
+| ADR | `doc/adr/` decision records, including the Model assumptions field | written once; superseded, never edited |
 
 For hardware and hybrid hardware-software products, physical acceptance goes through the human gate: measurements, photos, or test records produced by a work item become artifacts, and a person clears the batch against that evidence when it closes. Parts with unknown risk are cut into spike slices and verified before entering the main route.
 
@@ -73,7 +74,7 @@ For hardware and hybrid hardware-software products, physical acceptance goes thr
 Set direction (when direction changes)   human asks → loom goal drafts → human reviews the diff
 Open a batch (once per batch)            human picks current direction and urgency → model slices → human reviews the TaskSpec
 Run slices (per work item)               dispatch → verify → merge, agent loops, escalate when stuck
-Close a batch (end of batch)             board + stats retrospective → write a direction record → back to Open a batch
+Close a batch (end of batch)             board + stats retrospective → confirmed failures become regression tests/acceptance (no test, no close) → write a direction record → back to Open a batch
 ```
 
 The cadence is driven by acceptance and budgets, not by the calendar.
