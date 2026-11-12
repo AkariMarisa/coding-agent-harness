@@ -1,5 +1,7 @@
 # 08 设计路线 v0.2：自有编排内核 + 可替换执行器
 
+> 语言：[English](08-design-roadmap-v0.2.md) | **简体中文**
+
 > 本版不推翻 01–07 的协议，只更换**载体**。  
 > 触发原因：2026-11 的 prompt 协议实测有效（单次通信 token 降低 40%–70%），但“手工放文件 + pi 插件”的方式不可持续；pi 的插件/概念变化太快，不能作为长期基座。  
 > **阅读方式**：01–04 的协议内容仍然有效；目录从 `.agent/` 映射到 `.loom/`，见 §10。05/06 中“pi 为主路径”的部分由本文替代。
@@ -482,7 +484,7 @@ goose 只看到“一个 LiteLLM endpoint + 一个 model alias”；GPT/DeepSeek
 | **M2 原生执行器** | 1–2 周 | 最小循环、工具结果投影、预算、prompt 库 | worker 任务通过；单任务 token 下降；可回退 adapter |
 | **M3 路由** | 1 周 | LiteLLM、role→tier、升级、成本护栏；GPT + DeepSeek 起步 | worker ≥50%；CPVT −20%；质量不退化 |
 | **M4 并行** | 1–2 周 | worktree、合并队列、锁、看板 | **2 并行起步**；无丢更新；合并 <5min；3 并行需 A/B 证明 `WPT`/`CPVT` 不退化 |
-| **M5 多仓库工作区**（待排期） | 1 周 | manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree | 见 [13](13-多仓库工作区与多端协同.md) §11 P0–P3；单成员任务零迁移 |
+| **M5 多仓库工作区**（待排期） | 1 周 | manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree | 见 [13](13-multi-repo-workspace-and-multi-client.zh-CN.md) §11 P0–P3；单成员任务零迁移 |
 
 ### 9.1 M0 具体做什么
 
@@ -524,7 +526,7 @@ goose 只看到“一个 LiteLLM endpoint + 一个 model alias”；GPT/DeepSeek
 >
 > 成本：provider 成本优先（`cost_source=provider`）；否则用派发模型的 `ModelCapability` 价格表估算（`pricing_table`）；价格未知则省略 `cost_usd` 并标 `unknown`。估算成本计入运行中预算与 `TaskBudget.max_cost_usd`，超限以 `budget_exceeded`/exit 3 停止。离线测试用 `LOOM_NATIVE_SCRIPT` 脚本化 provider，`scripts/smoke-native.sh` 端到端通过。剩余：真实模型 A/B、成本预算与真实账单校准、真实 goose/OpenCode canary。
 >
-> **wire 支持（2026-11-08）**：native 实现两种 wire——`chat`（OpenAI `/chat/completions`，默认）与 `messages`（Anthropic `/messages`，`x-api-key`+`anthropic-version` 头、`tool_use`/`tool_result` 内容块、thinking 块丢弃、`cache_read` 计入 cached），由 `[[models]] wire` 经 `LOOM_MODEL_CAPABILITY` 选择；`responses` 未实现，遇到 `wire = "responses"` 直接报错。选择 messages 的原因见 [14](14-当前问题与卡点.md) §2：当时中转 chat 路径不接受 tool 历史——后证实是**我方** chat wire 的格式缺陷，修复后中转 chat 复测200（错怪中转）；mimo 仍走 messages（cache 字段最干净）。真实链路：`gpt-6.1-sol`（chat）、`mimo-v2.6-pro`（messages，走 gpt 中转）、官方 `deepseek-flash`（chat）各完成 live dispatch→verify（`scripts/live-smoke.sh`，全程 ≤20k tokens）；`scripts/relay-probe.sh` 用多会话探测某模型在哪条 wire 上接受 tool 历史；`LOOM_NATIVE_DEBUG=1` 把每次请求/响应落到 run 日志（正文无凭据）。另修：`default_prompt_role` 改按 task role 选 prompt（升级到 frontier 不再拿到 orchestrator prompt）、packet 里重复的 system 段不再二次发送（每步省约 600 tokens）、provider 对 403/408/429/5xx 与传输错误重试 3 次（1s/2s 退避）。
+> **wire 支持（2026-11-08）**：native 实现两种 wire——`chat`（OpenAI `/chat/completions`，默认）与 `messages`（Anthropic `/messages`，`x-api-key`+`anthropic-version` 头、`tool_use`/`tool_result` 内容块、thinking 块丢弃、`cache_read` 计入 cached），由 `[[models]] wire` 经 `LOOM_MODEL_CAPABILITY` 选择；`responses` 未实现，遇到 `wire = "responses"` 直接报错。选择 messages 的原因见 [14](14-current-issues-and-blockers.zh-CN.md) §2：当时中转 chat 路径不接受 tool 历史——后证实是**我方** chat wire 的格式缺陷，修复后中转 chat 复测200（错怪中转）；mimo 仍走 messages（cache 字段最干净）。真实链路：`gpt-6.1-sol`（chat）、`mimo-v2.6-pro`（messages，走 gpt 中转）、官方 `deepseek-flash`（chat）各完成 live dispatch→verify（`scripts/live-smoke.sh`，全程 ≤20k tokens）；`scripts/relay-probe.sh` 用多会话探测某模型在哪条 wire 上接受 tool 历史；`LOOM_NATIVE_DEBUG=1` 把每次请求/响应落到 run 日志（正文无凭据）。另修：`default_prompt_role` 改按 task role 选 prompt（升级到 frontier 不再拿到 orchestrator prompt）、packet 里重复的 system 段不再二次发送（每步省约 600 tokens）、provider 对 403/408/429/5xx 与传输错误重试 3 次（1s/2s 退避）。
 >
 > **chat wire 两处格式修正（2026-11-08，官方联调发现）**：① `tool_calls` 必须按 OpenAI 嵌套格式 `{id, type:"function", function:{name, arguments}}` 序列化——此前直接发扁平内部结构，官方报422 `messages[N]: missing field type`，中转403 也是同一根因；② `reasoning_content` 解析后随 assistant 消息原样回传——官方 thinking 模式强制要求（`The reasoning_content in the thinking mode must be passed back`），此前解析直接丢弃。修正后官方 `deepseek-flash` 首次探测即200，完整任务9秒通过（缓存命中89%）；gpt/mimo 回归不变。`ChatMessage` 因此新增 `reasoning_content` 字段（wire-neutral，messages wire 不发送）。
 >
@@ -546,7 +548,7 @@ goose 只看到“一个 LiteLLM endpoint + 一个 model alias”；GPT/DeepSeek
 
 ### 9.5 M4 并行：实现状态（2026-11-08，完成）
 
-- **路径锁**：`.loom/locks/<sha256(path)[..12]>.lock`，字段与规则见 [03](03-核心协议.md) §13。`loom dispatch` / `loom verify` 在执行前按 `workspace.allowed_paths` 加锁；guard 是 RAII 且只释放自己写过的路径（嵌套 guard 不互相误释放）；owner 进程消失立即回收，lease 过期但 owner 存活由 `loom doctor` 报告为 stuck。
+- **路径锁**：`.loom/locks/<sha256(path)[..12]>.lock`，字段与规则见 [03](03-core-protocols.zh-CN.md) §13。`loom dispatch` / `loom verify` 在执行前按 `workspace.allowed_paths` 加锁；guard 是 RAII 且只释放自己写过的路径（嵌套 guard 不互相误释放）；owner 进程消失立即回收，lease 过期但 owner 存活由 `loom doctor` 报告为 stuck。
 - **并行上限与预算**：`[parallel] max_running`（默认 2）按“持有存活锁的任务数”计数；`[parallel] max_inflight_cost_usd`（默认 0 = 不限）限制并发任务 `budget.max_cost_usd` 之和。超限分别写 `task.blocked(code=parallel_cap / inflight_budget)`，任务可重试。
 - **合并队列**：`loom merge <task>` 只接受 `passed` 任务（或上次 `merge_conflict`/`integration_verify` 阻塞后的重试）。流程 = 全局 `**` 锁（合并期间暂停一切写任务派发）→ 合并前重新 verify → 干净树检查 → `git rebase`（冲突则 abort 并 `task.blocked(code=merge_conflict)`）→ `git merge` → 集成 verify（在 base checkout 重跑 acceptance，失败则 `reset --hard` 回滚并 `task.blocked(code=integration_verify)`）→ `task.merged(merge_sha, base_before, integration_verify)` → 清理 worktree 与分支（失败仅告警）。in-place 任务被拒绝（改动已在 base 分支上）。
 - **看板**：`loom board`（`--format json|pretty`）按状态列出全部任务，并显示 running/max、锁持有者。
@@ -661,7 +663,7 @@ goose 只看到“一个 LiteLLM endpoint + 一个 model alias”；GPT/DeepSeek
    - Windows 会影响 worktree 长路径、进程组、文件锁、shell。
 5. **native executor 的实现位置**：Rust 主二进制内，还是独立进程（Python/Go/Rust）。
    - 建议先独立进程，避免和 M0 控制面绑死。
-6. **代码索引的规模与语言覆盖**：R1 是否值得做、是否引入 zoekt；见 [09-代码检索与知识库.md](09-代码检索与知识库.md) §14.2。
+6. **代码索引的规模与语言覆盖**：R1 是否值得做、是否引入 zoekt；见 [09-code-search-and-knowledge-base.zh-CN.md](09-code-search-and-knowledge-base.zh-CN.md) §14.2。
    - 已定：v1 不引入 embedding；M0 只做 R0 + 工具预算 + 检索轨迹。
 
 ---

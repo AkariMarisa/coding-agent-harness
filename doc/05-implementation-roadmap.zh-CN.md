@@ -1,6 +1,8 @@
 # 05 实施路线
 
-> **v0.2 修订（2026-11-04）**：S 阶段已由 [08-设计路线-v0.2.md](08-设计路线-v0.2.md) 的 M0 替代；不再先做 pi 插件/手工文件，而是先做独立 CLI + 状态所有权。  
+> 语言：[English](05-implementation-roadmap.md) | **简体中文**
+
+> **v0.2 修订（2026-11-04）**：S 阶段已由 [08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md) 的 M0 替代；不再先做 pi 插件/手工文件，而是先做独立 CLI + 状态所有权。  
 > P0–P4 的验收思路仍可复用，阶段编号与时间以 08 为准。
 
 ## 0. 原则
@@ -226,7 +228,7 @@
 - 不做自动解决语义冲突。
 - 不做无锁并行写同一路径。
 
-> **实现状态（2026-11-08）**：路径锁、`[parallel] max_running` / `max_inflight_cost_usd`、合并队列（`loom merge`：全局 `**` 锁 → 合并前 verify → rebase → merge → 集成 verify → 失败回滚）、看板（`loom board`）已落地。退出标准里的“2 并行跑 10 个任务、无丢更新、合并 <5 分钟”由 `scripts/smoke-parallel.sh` 实测通过（10 任务 / 2 并发 / 0 失败 / 10 次合并 <5 分钟）。“相同输入哈希去重”被路径锁覆盖——输出路径相交本身就会被阻塞；cache hit 影响与 3 并行 A/B 仍需真实 provider。详见 [08](08-设计路线-v0.2.md) §9.5。
+> **实现状态（2026-11-08）**：路径锁、`[parallel] max_running` / `max_inflight_cost_usd`、合并队列（`loom merge`：全局 `**` 锁 → 合并前 verify → rebase → merge → 集成 verify → 失败回滚）、看板（`loom board`）已落地。退出标准里的“2 并行跑 10 个任务、无丢更新、合并 <5 分钟”由 `scripts/smoke-parallel.sh` 实测通过（10 任务 / 2 并发 / 0 失败 / 10 次合并 <5 分钟）。“相同输入哈希去重”被路径锁覆盖——输出路径相交本身就会被阻塞；cache hit 影响与 3 并行 A/B 仍需真实 provider。详见 [08](08-design-roadmap-v0.2.zh-CN.md) §9.5。
 
 ## 7. 阶段 P4：优化（持续）
 

@@ -1,5 +1,7 @@
 # 07 参考实现片段
 
+> 语言：[English](07-reference-implementation-snippets.md) | **简体中文**
+
 > 这些是“可直接抄”的骨架，不是最终实现。字段语义以 03 为准；版本/参数以本机 `--help` 为准。
 
 ## 1. TaskSpec JSON Schema

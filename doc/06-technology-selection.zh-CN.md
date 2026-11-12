@@ -1,7 +1,9 @@
 # 06 技术选型
 
+> 语言：[English](06-technology-selection.md) | **简体中文**
+
 > **v0.2 修订（2026-11-04）**：pi 已从“主路径”降为“可选 adapter”；核心改为独立 CLI/daemon + 进程级执行器契约。  
-> 选型结论以 [08-设计路线-v0.2.md](08-设计路线-v0.2.md) 为准；本文的工具对照与 Aider/Headroom/LiteLLM 边界仍然有效。
+> 选型结论以 [08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md) 为准；本文的工具对照与 Aider/Headroom/LiteLLM 边界仍然有效。
 
 > 本文的目标不是“选一个最强工具”，而是回答：**哪些必须自己写，哪些必须复用，哪些坚决不碰。**  
 > 工具版本与能力以 2026-11 前序讨论和本机实测为准；落地前必须逐项核实。

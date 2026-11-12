@@ -1,13 +1,15 @@
 # Loom（暂定名）
 
+> 语言：[English](README.md) | **简体中文**
+
 > 面向软件设计、架构与开发的 token 高效 Agent Harness  
 > 核心命题：**长任务，短上下文。**
 
-> **v0.2 修订（2026-11-04）**：设计路线以 [08-设计路线-v0.2.md](08-设计路线-v0.2.md) 为准。  
+> **v0.2 修订（2026-11-04）**：设计路线以 [08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md) 为准。  
 > pi 从“主路径”降为“可选 adapter”；核心改为**独立 CLI/daemon + 进程级执行器契约**。  
 > 01–04 仍然有效；05/06 中与 08 冲突的部分，以 08 为准。
 
-> **当前优先级（2026-11-05）**：前期用 **API key** 跑通 API lane；GPT、DeepSeek、Kimi、MiniMax、MiMo 等 key 可提供，先选 GPT + DeepSeek 做两档验证，其他按 A/B 逐步接。订阅 lane（[11](11-订阅额度与Agent-SDK.md)）与混合 lane（[12](12-外部实践对照与采纳.md) §4）**后置**，不阻塞 M0/M1；前期投入订阅对接不划算。
+> **当前优先级（2026-11-05）**：前期用 **API key** 跑通 API lane；GPT、DeepSeek、Kimi、MiniMax、MiMo 等 key 可提供，先选 GPT + DeepSeek 做两档验证，其他按 A/B 逐步接。订阅 lane（[11](11-subscription-quota-and-agent-sdk.zh-CN.md)）与混合 lane（[12](12-external-practices-comparison-and-adoption.zh-CN.md) §4）**后置**，不阻塞 M0/M1；前期投入订阅对接不划算。
 
 ## 1. 一句话
 
@@ -46,25 +48,25 @@
 
 | 文档 | 内容 | 读者 |
 |---|---|---|
-| [01-问题与需求.md](01-问题与需求.md) | 背景、痛点、目标/非目标、FR/NFR、验收总则 | 产品/技术负责人 |
-| [02-总体架构.md](02-总体架构.md) | 设计原则、分层、组件、拓扑、状态机、并发、安全 | 架构/实现者 |
-| [03-核心协议.md](03-核心协议.md) | `.agent/` 布局、TaskSpec、Receipt、Verify、升级、预算、事件 | 实现者/Agent |
-| [04-上下文与成本模型.md](04-上下文与成本模型.md) | token 公式、浪费分类、上下文预算、缓存/压缩/路由、指标体系 | 架构/运营 |
-| [05-实施路线.md](05-实施路线.md) | S/P0–P4 阶段、退出标准、风险、开放问题、运营手册 | 项目负责人 |
-| [06-技术选型.md](06-技术选型.md) | pi/Codex/Aider/LiteLLM/Headroom/DSH 对照与边界 | 架构/选型 |
-| [07-参考实现片段.md](07-参考实现片段.md) | 配置、Schema、Prompt、脚本、兼容性清单 | 实现者 |
-| [08-设计路线-v0.2.md](08-设计路线-v0.2.md) | **v0.2 修订**：自有编排内核、状态所有权、adapter 契约、M0–M4 路线 | 架构/实现者 |
-| [09-代码检索与知识库.md](09-代码检索与知识库.md) | **评估笔记**：代码索引 vs 知识库、R0–R3 分层、新鲜度与 A/B | 架构/实现者 |
-| [10-工具输出协议-v0.1.md](10-工具输出协议-v0.1.md) | **协议草案**：envelope、短键、三级限额、artifact、telemetry、Headroom 接法 | 实现者 |
-| [11-订阅额度与Agent-SDK.md](11-订阅额度与Agent-SDK.md) | **调研笔记**：订阅 vs API、Codex/Claude 的 SDK/CLI 边界、网关兼容性、实现方案 | 架构/实现者 |
-| [12-外部实践对照与采纳.md](12-外部实践对照与采纳.md) | **对照笔记**：外部 harness/多模型/订阅实践，采纳并发、能力位、混合 lane、观测口径 | 架构/实现者 |
-| [13-多仓库工作区与多端协同.md](13-多仓库工作区与多端协同.md) | **设计稿（未实现）**：monorepo 对照、meta 控制面、manifest 成员仓库、同名分支聚合 worktree、跨端任务拆分 | 架构/实现者 |
-| [14-当前问题与卡点.md](14-当前问题与卡点.md) | **状态记录**：环境卡点、M2/M3 未闭环项、技术债与下一步 | 项目负责人/实现者 |
-| [15-Agent运行时治理与工程化.md](15-Agent运行时治理与工程化.md) | **设计稿（未实现）**：写入抖动（churn）、提问阻塞与 attention inbox、skills 治理、agent/harness 驱动的本地 CI | 架构/实现者 |
-| [16-运行时治理落地评估.md](16-运行时治理落地评估.md) | **评估稿（未改代码）**：基于现有代码的接入点、契约变更、分期、人日与风险；含 `.loom.ci.toml` 归属、目标项目 vs dogfood、attestation、verify 语义修正 | 项目负责人/实现者 |
-| [17-工作区开发环境隔离.md](17-工作区开发环境隔离.md) | **方向记录（未设计）**：三平台按工作区隔离环境、A+B 无虚拟化、复用既有声明文件、容器降级为可选 profile；不做通用环境管理器 | 项目负责人/实现者 |
-| [18-Agent协作工作法提案.md](18-Agent协作工作法提案.md) | **方法提案（未实施）**：六十年流程史的存活原则、失效仪式清单、方向/批次/工作项三层节奏、人的四个介入点、新人六命令上手路径；配套 `loom plan` | 项目负责人/新人 |
-| [`.opencode/skill-pilot/README.md`](../.opencode/skill-pilot/README.md) | **Skill 试点**：项目级 skill 清单、触发范围、固定 token 成本、来源与许可 | 实现者/维护者 |
+| [01-problems-and-requirements.zh-CN.md](01-problems-and-requirements.zh-CN.md) | 背景、痛点、目标/非目标、FR/NFR、验收总则 | 产品/技术负责人 |
+| [02-overall-architecture.zh-CN.md](02-overall-architecture.zh-CN.md) | 设计原则、分层、组件、拓扑、状态机、并发、安全 | 架构/实现者 |
+| [03-core-protocols.zh-CN.md](03-core-protocols.zh-CN.md) | `.agent/` 布局、TaskSpec、Receipt、Verify、升级、预算、事件 | 实现者/Agent |
+| [04-context-and-cost-model.zh-CN.md](04-context-and-cost-model.zh-CN.md) | token 公式、浪费分类、上下文预算、缓存/压缩/路由、指标体系 | 架构/运营 |
+| [05-implementation-roadmap.zh-CN.md](05-implementation-roadmap.zh-CN.md) | S/P0–P4 阶段、退出标准、风险、开放问题、运营手册 | 项目负责人 |
+| [06-technology-selection.zh-CN.md](06-technology-selection.zh-CN.md) | pi/Codex/Aider/LiteLLM/Headroom/DSH 对照与边界 | 架构/选型 |
+| [07-reference-implementation-snippets.zh-CN.md](07-reference-implementation-snippets.zh-CN.md) | 配置、Schema、Prompt、脚本、兼容性清单 | 实现者 |
+| [08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md) | **v0.2 修订**：自有编排内核、状态所有权、adapter 契约、M0–M4 路线 | 架构/实现者 |
+| [09-code-search-and-knowledge-base.zh-CN.md](09-code-search-and-knowledge-base.zh-CN.md) | **评估笔记**：代码索引 vs 知识库、R0–R3 分层、新鲜度与 A/B | 架构/实现者 |
+| [10-tool-output-protocol-v0.1.zh-CN.md](10-tool-output-protocol-v0.1.zh-CN.md) | **协议草案**：envelope、短键、三级限额、artifact、telemetry、Headroom 接法 | 实现者 |
+| [11-subscription-quota-and-agent-sdk.zh-CN.md](11-subscription-quota-and-agent-sdk.zh-CN.md) | **调研笔记**：订阅 vs API、Codex/Claude 的 SDK/CLI 边界、网关兼容性、实现方案 | 架构/实现者 |
+| [12-external-practices-comparison-and-adoption.zh-CN.md](12-external-practices-comparison-and-adoption.zh-CN.md) | **对照笔记**：外部 harness/多模型/订阅实践，采纳并发、能力位、混合 lane、观测口径 | 架构/实现者 |
+| [13-multi-repo-workspace-and-multi-client.zh-CN.md](13-multi-repo-workspace-and-multi-client.zh-CN.md) | **设计稿（未实现）**：monorepo 对照、meta 控制面、manifest 成员仓库、同名分支聚合 worktree、跨端任务拆分 | 架构/实现者 |
+| [14-current-issues-and-blockers.zh-CN.md](14-current-issues-and-blockers.zh-CN.md) | **状态记录**：环境卡点、M2/M3 未闭环项、技术债与下一步 | 项目负责人/实现者 |
+| [15-agent-runtime-governance-and-engineering.zh-CN.md](15-agent-runtime-governance-and-engineering.zh-CN.md) | **设计稿（未实现）**：写入抖动（churn）、提问阻塞与 attention inbox、skills 治理、agent/harness 驱动的本地 CI | 架构/实现者 |
+| [16-runtime-governance-adoption-assessment.zh-CN.md](16-runtime-governance-adoption-assessment.zh-CN.md) | **评估稿（未改代码）**：基于现有代码的接入点、契约变更、分期、人日与风险；含 `.loom.ci.toml` 归属、目标项目 vs dogfood、attestation、verify 语义修正 | 项目负责人/实现者 |
+| [17-workspace-dev-environment-isolation.zh-CN.md](17-workspace-dev-environment-isolation.zh-CN.md) | **方向记录（未设计）**：三平台按工作区隔离环境、A+B 无虚拟化、复用既有声明文件、容器降级为可选 profile；不做通用环境管理器 | 项目负责人/实现者 |
+| [18-agent-collaboration-workflow-proposal.zh-CN.md](18-agent-collaboration-workflow-proposal.zh-CN.md) | **方法提案（未实施）**：六十年流程史的存活原则、失效仪式清单、方向/批次/工作项三层节奏、人的四个介入点、新人六命令上手路径；配套 `loom plan` | 项目负责人/新人 |
+| [`.opencode/skill-pilot/README.zh-CN.md`](../.opencode/skill-pilot/README.zh-CN.md) | **Skill 试点**：项目级 skill 清单、触发范围、固定 token 成本、来源与许可 | 实现者/维护者 |
 
 **推荐阅读顺序**：README → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10。11/12 是后续调研，可最后读；13 是多仓库工作区设计稿，做多端协同时再读；15 是运行时治理设计稿，16 是其落地评估，处理 agent 行为/工程化时按 15 → 16 阅读；如果只看一篇：**08**。
 
@@ -76,8 +78,8 @@
 4. **验证驱动**：`verify` 是唯一验收与升级信号；不做模型自评“这题难”，不因自评升级。
 5. **网关透明**：压缩与路由解耦；Headroom 保持 `cache` 模式，LiteLLM 放在 Headroom 之后；成本以 provider/LiteLLM 账单为准，Headroom stats 只作诊断。
 6. **执行器可替换**：稳定契约是进程 + 文件 + JSON + exit code；不把任何 agent 的插件 API 作为核心依赖。
-7. **工具端先减肥**：工具输出默认“摘要 + 地址 + artifact 引用”，单次/单 run 有硬上限；能在工具边界裁掉的 token，不留给 Headroom。检索 v1 不引入 embedding，见 [09](09-代码检索与知识库.md)。
-8. **认证/计费分平面**：API 与订阅是两条 lane；订阅不假设能透明穿过 Headroom/LiteLLM，不静默回退到 API，见 [11](11-订阅额度与Agent-SDK.md)。
+7. **工具端先减肥**：工具输出默认“摘要 + 地址 + artifact 引用”，单次/单 run 有硬上限；能在工具边界裁掉的 token，不留给 Headroom。检索 v1 不引入 embedding，见 [09](09-code-search-and-knowledge-base.zh-CN.md)。
+8. **认证/计费分平面**：API 与订阅是两条 lane；订阅不假设能透明穿过 Headroom/LiteLLM，不静默回退到 API，见 [11](11-subscription-quota-and-agent-sdk.zh-CN.md)。
 
 ## 5. 非目标
 
@@ -123,10 +125,10 @@
 
 - 版本：v0.2（2026-11-04）
 - 依据：前序需求讨论 v0.4 + 本机实测快照 + prompt 协议实测 + 当前工具链
-- 本版重点：从“pi 插件 + 手工文件”转为“独立 CLI + 状态所有权 + 可替换 adapter”；见 [08-设计路线-v0.2.md](08-设计路线-v0.2.md)
-- M1 主体已落地：`loom task add/list/show/ready/graph`、`loom event list`、`loom context compile`、`loom prompt list/show`、`loom adapter list/canary`、`loom dispatch`、`loom verify`、`loom resume`、`loom usage ingest`；模型能力位见 [06](06-技术选型.md) §5.6，请求账本见 [03](03-核心协议.md) §12，Schema 见 [`schemas/`](../schemas/)（task-spec / event / receipt / context-manifest / usage-record / adapter-usage）
-- M2 起步：`loom-native` 独立执行器已接入 `--adapter native`，含 OpenAI-compatible 工具循环、结果投影、token/墙钟/步数/成本预算、acceptance 回灌、失败包注入、no-progress 与脚本化 provider；见 [08](08-设计路线-v0.2.md) §9.3
-- M3 控制面路由：`[routing]` + `loom route`，含 role→tier、verify 失败升级、tier 成本护栏与派发前估算；真实模型 A/B 与 LiteLLM canary 仍待环境；见 [08](08-设计路线-v0.2.md) §9.4
-- 当前卡点与未闭环项：见 [14-当前问题与卡点.md](14-当前问题与卡点.md)
-- 待本机核实项：见 [05-实施路线.md](05-实施路线.md) 的“开放问题”和 [07-参考实现片段.md](07-参考实现片段.md) 的“兼容性清单”
+- 本版重点：从“pi 插件 + 手工文件”转为“独立 CLI + 状态所有权 + 可替换 adapter”；见 [08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md)
+- M1 主体已落地：`loom task add/list/show/ready/graph`、`loom event list`、`loom context compile`、`loom prompt list/show`、`loom adapter list/canary`、`loom dispatch`、`loom verify`、`loom resume`、`loom usage ingest`；模型能力位见 [06](06-technology-selection.zh-CN.md) §5.6，请求账本见 [03](03-core-protocols.zh-CN.md) §12，Schema 见 [`schemas/`](../schemas/)（task-spec / event / receipt / context-manifest / usage-record / adapter-usage）
+- M2 起步：`loom-native` 独立执行器已接入 `--adapter native`，含 OpenAI-compatible 工具循环、结果投影、token/墙钟/步数/成本预算、acceptance 回灌、失败包注入、no-progress 与脚本化 provider；见 [08](08-design-roadmap-v0.2.zh-CN.md) §9.3
+- M3 控制面路由：`[routing]` + `loom route`，含 role→tier、verify 失败升级、tier 成本护栏与派发前估算；真实模型 A/B 与 LiteLLM canary 仍待环境；见 [08](08-design-roadmap-v0.2.zh-CN.md) §9.4
+- 当前卡点与未闭环项：见 [14-current-issues-and-blockers.zh-CN.md](14-current-issues-and-blockers.zh-CN.md)
+- 待本机核实项：见 [05-implementation-roadmap.zh-CN.md](05-implementation-roadmap.zh-CN.md) 的“开放问题”和 [07-reference-implementation-snippets.zh-CN.md](07-reference-implementation-snippets.zh-CN.md) 的“兼容性清单”
 - 文档中的模型名、端口、CLI 参数均为**示例/占位**，落地前以本机 `--version`、`--help` 与官方文档为准。

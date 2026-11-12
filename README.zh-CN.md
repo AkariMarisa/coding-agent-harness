@@ -1,5 +1,7 @@
 # Loom
 
+> 语言：[English](README.md) | **简体中文**
+
 > 面向软件设计、架构与开发的 token 高效 Agent Harness  
 > 核心命题：**长任务，短上下文。**
 
@@ -9,12 +11,12 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 
 | 项 | 状态 |
 |---|---|
-| 设计文档 | v0.2，见 [doc/README.md](doc/README.md) |
-| 工具输出协议 | v0.1，见 [doc/10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md) |
+| 设计文档 | v0.2，见 [doc/README.zh-CN.md](doc/README.zh-CN.md) |
+| 工具输出协议 | v0.1，见 [doc/10-tool-output-protocol-v0.1.zh-CN.md](doc/10-tool-output-protocol-v0.1.zh-CN.md) |
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
 | 已实现 | `loom init/doctor/status`、`loom board`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom merge`、`loom resume` |
-| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实账单对账。详见 [doc/14-当前问题与卡点.md](doc/14-当前问题与卡点.md) |
-| 已设计未实现 | churn 治理余项（L1–L3 分级干预、成本感知重启；步骤级投影、patch-first/write 守卫、token 归因与 `loom churn stats` 已实现）、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md) |
+| 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实账单对账。详见 [doc/14-current-issues-and-blockers.zh-CN.md](doc/14-current-issues-and-blockers.zh-CN.md) |
+| 已设计未实现 | churn 治理余项（L1–L3 分级干预、成本感知重启；步骤级投影、patch-first/write 守卫、token 归因与 `loom churn stats` 已实现）、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-agent-runtime-governance-and-engineering.zh-CN.md](doc/15-agent-runtime-governance-and-engineering.zh-CN.md) |
 
 ## 快速开始
 
@@ -94,7 +96,7 @@ loom dispatch T-001 --adapter native
 LOOM_NATIVE_SCRIPT=/path/to/script.json loom dispatch T-001 --adapter native --in-place
 ```
 
-可选环境变量：`LOOM_NATIVE_BIN`（指定二进制路径）、`LOOM_NATIVE_MAX_TOKENS`、`LOOM_NATIVE_MAX_IDLE`、`LOOM_NATIVE_MAX_VERIFY_ROUNDS`、`LOOM_NATIVE_TEMPERATURE`、`LOOM_NATIVE_SKIP_ACCEPTANCE`、`LOOM_NATIVE_DEBUG`（请求/响应转储到 run 日志）、`LOOM_NATIVE_HISTORY_BYTES` / `LOOM_NATIVE_KEEP_TURNS` / `LOOM_NATIVE_MIN_CLEAR`（步骤级投影，0 关闭；见 [doc/15](doc/15-Agent运行时治理与工程化.md) §1）。
+可选环境变量：`LOOM_NATIVE_BIN`（指定二进制路径）、`LOOM_NATIVE_MAX_TOKENS`、`LOOM_NATIVE_MAX_IDLE`、`LOOM_NATIVE_MAX_VERIFY_ROUNDS`、`LOOM_NATIVE_TEMPERATURE`、`LOOM_NATIVE_SKIP_ACCEPTANCE`、`LOOM_NATIVE_DEBUG`（请求/响应转储到 run 日志）、`LOOM_NATIVE_HISTORY_BYTES` / `LOOM_NATIVE_KEEP_TURNS` / `LOOM_NATIVE_MIN_CLEAR`（步骤级投影，0 关闭；见 [doc/15](doc/15-agent-runtime-governance-and-engineering.zh-CN.md) §1）。
 
 - acceptance 在 native 内预跑；失败时把命令、退出码和截断输出回灌给模型，默认最多 2 轮（`LOOM_NATIVE_MAX_VERIFY_ROUNDS`，最小 1），轮次耗尽标记 `failed`。
 - 成本：provider 返回成本时记 `cost_source=provider`；否则用派发模型的 `ModelCapability` 价格表估算并记 `pricing_table`；价格未知则省略 `cost_usd` 并记 `unknown`。估算成本同样计入 `TaskBudget.max_cost_usd`，超限以 `budget_exceeded` / exit 3 停止。
@@ -149,14 +151,20 @@ loom route stats                 # 按事件日志统计 worker 占比、升级/
 
 ## 设计入口
 
-- 只看一篇：[08-设计路线-v0.2.md](doc/08-设计路线-v0.2.md)
-- 检索/知识库：[09-代码检索与知识库.md](doc/09-代码检索与知识库.md)
-- 工具协议：[10-工具输出协议-v0.1.md](doc/10-工具输出协议-v0.1.md)
-- 多仓库工作区（设计稿）：[13-多仓库工作区与多端协同.md](doc/13-多仓库工作区与多端协同.md)
-- 当前问题与卡点：[14-当前问题与卡点.md](doc/14-当前问题与卡点.md)
-- 运行时治理（设计稿）：[15-Agent运行时治理与工程化.md](doc/15-Agent运行时治理与工程化.md)
-- 文档总览：[doc/README.md](doc/README.md)
+- 只看一篇：[08-design-roadmap-v0.2.zh-CN.md](doc/08-design-roadmap-v0.2.zh-CN.md)
+- 检索/知识库：[09-code-search-and-knowledge-base.zh-CN.md](doc/09-code-search-and-knowledge-base.zh-CN.md)
+- 工具协议：[10-tool-output-protocol-v0.1.zh-CN.md](doc/10-tool-output-protocol-v0.1.zh-CN.md)
+- 多仓库工作区（设计稿）：[13-multi-repo-workspace-and-multi-client.zh-CN.md](doc/13-multi-repo-workspace-and-multi-client.zh-CN.md)
+- 当前问题与卡点：[14-current-issues-and-blockers.zh-CN.md](doc/14-current-issues-and-blockers.zh-CN.md)
+- 运行时治理（设计稿）：[15-agent-runtime-governance-and-engineering.zh-CN.md](doc/15-agent-runtime-governance-and-engineering.zh-CN.md)
+- 文档总览：[doc/README.zh-CN.md](doc/README.zh-CN.md)
+
+## 参与贡献
+
+欢迎贡献，先读 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。所有参与受[行为准则](CODE_OF_CONDUCT.zh-CN.md)约束。安全问题见 [SECURITY.zh-CN.md](SECURITY.zh-CN.md)。
 
 ## 许可
 
-待定（TBD）。在确定前不要假设可以对外分发。
+Copyright (c) 2026 The Loom authors。保留所有权利。
+
+本仓库采用 [PolyForm Noncommercial License 1.0.0](LICENSE)（SPDX：`PolyForm-Noncommercial-1.0.0`，以英文原文为准）：非商业目的可使用、修改与分发；商业使用需另行取得著作权人授权。许可证为暂行版本，最终确定后本节会同步更新。

@@ -1,9 +1,11 @@
 # 16 运行时治理落地评估
 
+> 语言：[English](16-runtime-governance-adoption-assessment.md) | **简体中文**
+
 > 状态：**评估稿 v2，未改实现代码**（2026-11-07）。
 > 范围：attention inbox / question protocol、本地 CI、churn、skills 四个方向。
 > 方法：先核对当前代码事实，再对照外部成熟方案，最后给出取舍、契约、测试与分期。设计稿里的“应该”不作为可行性证据。
-> 前置阅读：[15-Agent运行时治理与工程化.md](15-Agent运行时治理与工程化.md)、[14-当前问题与卡点.md](14-当前问题与卡点.md)、[10-工具输出协议-v0.1.md](10-工具输出协议-v0.1.md)。
+> 前置阅读：[15-agent-runtime-governance-and-engineering.zh-CN.md](15-agent-runtime-governance-and-engineering.zh-CN.md)、[14-current-issues-and-blockers.zh-CN.md](14-current-issues-and-blockers.zh-CN.md)、[10-tool-output-protocol-v0.1.zh-CN.md](10-tool-output-protocol-v0.1.zh-CN.md)。
 
 ---
 
@@ -194,8 +196,8 @@ adapter 契约保持不变：仍然写 `outbox/receipt.json`。`verify` 在覆�
 | 命令族 | 0 | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|---|
 | `loom verify`（本方案） | 通过 | 验收或 claim 失败 | `needs_input` / `blocked` | 预算/超时 | 内部错误 |
-| `loom tool`（[10](10-工具输出协议-v0.1.md) §5） | 成功 | — | 参数错误 | 超时/预算 | 内部错误 |
-| adapter（[08](08-设计路线-v0.2.md) §7.1） | 成功 | — | 需人工 | 预算/超时 | adapter 故障 |
+| `loom tool`（[10](10-tool-output-protocol-v0.1.zh-CN.md) §5） | 成功 | — | 参数错误 | 超时/预算 | 内部错误 |
+| adapter（[08](08-design-roadmap-v0.2.zh-CN.md) §7.1） | 成功 | — | 需人工 | 预算/超时 | adapter 故障 |
 
 需要在 `loom verify --help`、CLI 文档和测试里同时写明，避免调用方把 `needs_input` 当成参数错误。
 

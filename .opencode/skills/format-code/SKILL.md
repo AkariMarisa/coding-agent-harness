@@ -1,5 +1,5 @@
 ---
-name: 代码格式化
+name: Code Formatting
 description: "Use when asked to format or check formatting, or when the task is specifically formatting Rust/YAML/SQL/JSON/Markdown/Shell/TOML files that already have formatter config. Do not use for ordinary edits, commits, lint, or tests."
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: 代码重构与清理
+name: Code Refactoring & Cleanup
 description: "Use when asked to apply a refactor, clean up, simplify, or fix named code smells. Do not use for review-only requests (use code-quality-review), feature work, formatting/lint, or speculative rewrites."
 ---
 

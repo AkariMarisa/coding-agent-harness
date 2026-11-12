@@ -1,8 +1,10 @@
 # 12 外部实践对照与采纳（2026-11）
 
+> 语言：[English](12-external-practices-comparison-and-adoption.md) | **简体中文**
+
 > **来源**：两份 2026-11-05 的元宝对话（<https://yb.tencent.com/s/xDULZPSc4rGJ>、<https://yb.tencent.com/s/ayaF5zkD04ow>）。
 > 内容是 AI 生成 + 二手整理，模型名、价格、字段名和统计口径都可能过期或错误；本文只提取“对 Loom 有增量”的部分，落地前必须本机核实。
-> 与 [11](11-订阅额度与Agent-SDK.md) 重叠的订阅结论不重复展开；本文重点是多模型、并发、观测口径和混合 lane。
+> 与 [11](11-subscription-quota-and-agent-sdk.zh-CN.md) 重叠的订阅结论不重复展开；本文重点是多模型、并发、观测口径和混合 lane。
 
 ---
 
@@ -26,15 +28,15 @@
 
 | 外部观点 | 我们的对应 |
 |---|---|
-| 长会话成本是二次方，20 轮约为首轮 52× | [04](04-上下文与成本模型.md) §1.1 |
-| 切片不是“多对话”，是“短上下文” | [04](04-上下文与成本模型.md) §1.3、[08](08-设计路线-v0.2.md) |
-| 压缩只省 0.70%，缓存折扣 $270.63 | [04](04-上下文与成本模型.md) §5 |
-| 工具结果按引用返回，不按值回贴 | [04](04-上下文与成本模型.md) §2、[10](10-工具输出协议-v0.1.md) |
-| 四行回执 + 文件状态 | [03](03-核心协议.md)、[04](04-上下文与成本模型.md) §3.2、[08](08-设计路线-v0.2.md) |
-| 只在 verify 失败时升级 | [04](04-上下文与成本模型.md) §6.3 |
-| Aider 可直接 compose，但丢 retrieve、无 goal、无隔离 | [06](06-技术选型.md) §6 |
-| Headroom 在 LiteLLM 之前，压缩与路由解耦 | [06](06-技术选型.md) §5 |
-| 订阅是独立 lane，不静默回退 API | [11](11-订阅额度与Agent-SDK.md) |
+| 长会话成本是二次方，20 轮约为首轮 52× | [04](04-context-and-cost-model.zh-CN.md) §1.1 |
+| 切片不是“多对话”，是“短上下文” | [04](04-context-and-cost-model.zh-CN.md) §1.3、[08](08-design-roadmap-v0.2.zh-CN.md) |
+| 压缩只省 0.70%，缓存折扣 $270.63 | [04](04-context-and-cost-model.zh-CN.md) §5 |
+| 工具结果按引用返回，不按值回贴 | [04](04-context-and-cost-model.zh-CN.md) §2、[10](10-tool-output-protocol-v0.1.zh-CN.md) |
+| 四行回执 + 文件状态 | [03](03-core-protocols.zh-CN.md)、[04](04-context-and-cost-model.zh-CN.md) §3.2、[08](08-design-roadmap-v0.2.zh-CN.md) |
+| 只在 verify 失败时升级 | [04](04-context-and-cost-model.zh-CN.md) §6.3 |
+| Aider 可直接 compose，但丢 retrieve、无 goal、无隔离 | [06](06-technology-selection.zh-CN.md) §6 |
+| Headroom 在 LiteLLM 之前，压缩与路由解耦 | [06](06-technology-selection.zh-CN.md) §5 |
+| 订阅是独立 lane，不静默回退 API | [11](11-subscription-quota-and-agent-sdk.zh-CN.md) |
 
 > 这些不需要再“吸收”；需要的是按文档落地并用实测验证。
 
@@ -61,8 +63,8 @@
 
 ### 2.2 落点
 
-- [08](08-设计路线-v0.2.md) M4 退出标准；
-- [04](04-上下文与成本模型.md) §4.3；
+- [08](08-design-roadmap-v0.2.zh-CN.md) M4 退出标准；
+- [04](04-context-and-cost-model.zh-CN.md) §4.3；
 - TaskSpec 的 `paths` / 写集声明（M1/M4）。
 
 ---
@@ -93,9 +95,9 @@
 
 ### 3.3 落点
 
-- [04](04-上下文与成本模型.md) §6.5；
-- [06](06-技术选型.md) §5.6；
-- [11](11-订阅额度与Agent-SDK.md) §5.1（`credential_lane` 增加能力位）。
+- [04](04-context-and-cost-model.zh-CN.md) §6.5；
+- [06](06-technology-selection.zh-CN.md) §5.6；
+- [11](11-subscription-quota-and-agent-sdk.zh-CN.md) §5.1（`credential_lane` 增加能力位）。
 
 ---
 
@@ -105,7 +107,7 @@
 
 外部材料对“harness → goose → LiteLLM/Headroom → Agents SDK → Codex”的判断是：结构上更费，因为凭证体系把链路劈成两半，多一层 agent 就多一套上下文和缓存，压缩也够不到最终请求。
 
-这与 [11](11-订阅额度与Agent-SDK.md) 的结论一致，但补上了一个有用的形态：
+这与 [11](11-subscription-quota-and-agent-sdk.zh-CN.md) 的结论一致，但补上了一个有用的形态：
 
 ```text
 [控制面 / 决策面]
@@ -131,8 +133,8 @@
 
 ### 4.2 落点
 
-- [11](11-订阅额度与Agent-SDK.md) §6.4；
-- [02](02-总体架构.md) 拓扑图（后续补混合 lane）。
+- [11](11-subscription-quota-and-agent-sdk.zh-CN.md) §6.4；
+- [02](02-overall-architecture.zh-CN.md) 拓扑图（后续补混合 lane）。
 
 ---
 
@@ -158,7 +160,7 @@
 - `provider_cache_discount_usd` 单独记，不与压缩节省相加；
 - 订阅请求不能用 LiteLLM 的 `$0` spend 做预算。
 
-落点：[10](10-工具输出协议-v0.1.md) §8.1、[04](04-上下文与成本模型.md) §7.3。
+落点：[10](10-tool-output-protocol-v0.1.zh-CN.md) §8.1、[04](04-context-and-cost-model.zh-CN.md) §7.3。
 
 ---
 
@@ -176,8 +178,8 @@
 
 ### 6.2 落点
 
-- [04](04-上下文与成本模型.md) §6.2；
-- [08](08-设计路线-v0.2.md) M1 prompt 库、M2 原生执行器。
+- [04](04-context-and-cost-model.zh-CN.md) §6.2；
+- [08](08-design-roadmap-v0.2.zh-CN.md) M1 prompt 库、M2 原生执行器。
 
 ---
 
@@ -196,7 +198,7 @@
 
 验收：同一任务跑两遍，只比 `CPVT` 和 `cache_hit`。先证明“单 GPT + 上下文隔离”有效，再谈多模型。
 
-> 这组动作与 [08](08-设计路线-v0.2.md) 的 M0/M1 一致，区别是它不需要先有完整 CLI；可以作为手工止血清单。
+> 这组动作与 [08](08-design-roadmap-v0.2.zh-CN.md) 的 M0/M1 一致，区别是它不需要先有完整 CLI；可以作为手工止血清单。
 
 ---
 
@@ -248,6 +250,6 @@
 
 - 元宝对话 1：多模型 Agent 工作流优化、pi 插件、S 阶段配置、全局 prompt（2026-11-05，AI 生成）。
 - 元宝对话 2：Codex 直连 vs 多层 harness、订阅额度、廉价模型选型（2026-11-05，AI 生成）。
-- 本仓库：[04](04-上下文与成本模型.md)、[06](06-技术选型.md)、[08](08-设计路线-v0.2.md)、[10](10-工具输出协议-v0.1.md)、[11](11-订阅额度与Agent-SDK.md)。
+- 本仓库：[04](04-context-and-cost-model.zh-CN.md)、[06](06-technology-selection.zh-CN.md)、[08](08-design-roadmap-v0.2.zh-CN.md)、[10](10-tool-output-protocol-v0.1.zh-CN.md)、[11](11-subscription-quota-and-agent-sdk.zh-CN.md)。
 
 > 外部的模型名、价格、榜单和字段名只作线索；以本机 `--help`、provider 账单和 A/B 结果为准。

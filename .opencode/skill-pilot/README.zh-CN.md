@@ -1,5 +1,7 @@
 # Skill 试点说明
 
+> 语言：[English](README.md) | **简体中文**
+
 这是 Loom 仓库内的项目级 skill 试点，不安装到 `~/.config/opencode/skills`。
 
 位置：`.opencode/skills/`。OpenCode 在当前项目内自动发现；队友克隆仓库后即可使用，不需要额外安装。

@@ -1,5 +1,5 @@
 ---
-name: 架构与接口设计
+name: Architecture & Interface Design
 description: "Use when asked to design or change module boundaries, interfaces, seams, or data ownership, compare architecture options, or record an ADR. Do not use for code review/audit, routine implementation, or style questions."
 ---
 

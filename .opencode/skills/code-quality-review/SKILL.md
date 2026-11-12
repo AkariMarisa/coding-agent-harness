@@ -1,5 +1,5 @@
 ---
-name: 代码质量与架构审查
+name: Code Quality & Architecture Review
 description: "Use when asked to review/audit code, check architecture/module boundaries/dependency cycles, find code smells, or evaluate a refactor. Do not use for feature work, routine edits, formatting/lint, or single-line fixes."
 ---
 

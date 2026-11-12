@@ -1,5 +1,5 @@
 ---
-name: 文档写作与去 AI 味
+name: Documentation Writing & De-AI-ifying
 description: "Use when creating or substantially rewriting Markdown docs (README, design docs, ADRs, reports, release notes), or when asked to deslop/humanize/polish prose. Do not use for chat replies, code comments, or short factual answers."
 ---
 

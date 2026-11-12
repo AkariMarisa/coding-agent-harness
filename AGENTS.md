@@ -1,25 +1,25 @@
 # AGENTS.md
 
-本文件是仓库内 AI agent 与人类协作者的共同约定。  
-目标：保持 Loom 的控制面薄、协议稳定、token 预算可验证。
+This file is the shared convention for AI agents and human collaborators in this repository.  
+The goals: keep Loom's control plane thin, the protocol stable, and the token budget verifiable.
 
-## 1. 先读什么
+## 1. What to Read First
 
-按顺序读：
+In order:
 
-1. `doc/08-设计路线-v0.2.md`（当前最高优先级设计）
-2. `doc/14-当前问题与卡点.md`（现在还不能证明/不能做的事）
-3. `doc/09-代码检索与知识库.md`（检索策略与边界）
-4. `doc/10-工具输出协议-v0.1.md`（工具 envelope 与限额）
-5. `schemas/tool-result.v1.json`（对外契约）
+1. `doc/08-design-roadmap-v0.2.md` (highest-priority design currently)
+2. `doc/14-current-issues-and-blockers.md` (what cannot be proven / done yet)
+3. `doc/09-code-search-and-knowledge-base.md` (retrieval strategy and boundaries)
+4. `doc/10-tool-output-protocol-v0.1.md` (tool envelope and limits)
+5. `schemas/tool-result.v1.json` (the external contract)
 
-旧文档 `doc/02`–`doc/07` 仍然有效，但与 `08/09/10` 冲突时以新文档为准。
+Older docs `doc/02`–`doc/07` remain valid, but where they conflict with `08/09/10`, the newer docs win.
 
-## 2. 环境：只用容器
+## 2. Environment: Containers Only
 
-**不要使用宿主机安装的 Rust / cargo / rustc。**
+**Do not use a host-installed Rust / cargo / rustc.**
 
-统一入口：
+Unified entry points:
 
 ```bash
 ./scripts/dev.sh cargo build --workspace
@@ -28,141 +28,143 @@
 ./scripts/dev.sh cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-或 `make build/test/fmt/clippy/check`。
+Or `make build/test/fmt/clippy/check`.
 
-- 默认优先 `podman`，其次 `docker`。
-- 镜像由 `Containerfile` 构建；依赖缓存在 `.cache/cargo`。
-- 不要在仓库里提交 `target/`、`.cache/`、`.loom/`。
+- `podman` is preferred, `docker` is the fallback.
+- The image is built from `Containerfile`; dependency cache lives in `.cache/cargo`.
+- Never commit `target/`, `.cache/`, `.loom/` state.
 
-## 3. 代码布局
+## 3. Code Layout
 
 ```text
 src/
-├── Cargo.toml          # workspace，新增 crate 在这里注册
+├── Cargo.toml          # workspace; register new crates here
 └── crates/
-    ├── loom-core       # 纯类型/常量/配置/估算；尽量不做 IO
-    ├── loom-store      # .loom 文件布局、artifact、telemetry、去重
-    ├── loom-tools      # search/read/artifact 等工具逻辑
-    ├── loom-context    # Context Compiler + 版本化 prompt 库
-    ├── loom-adapter    # 进程级 adapter 契约、mock/native/goose/opencode、canary
-    ├── loom-native     # native executor：工具循环、结果投影、预算、no-progress
-    └── loom-cli        # clap 命令与输出格式化
+    ├── loom-core       # pure types/constants/config/estimation; avoid IO
+    ├── loom-store      # .loom file layout, artifacts, telemetry, dedup
+    ├── loom-tools      # search/read/artifact tool logic
+    ├── loom-context    # Context Compiler + versioned prompt library
+    ├── loom-adapter    # process-level adapter contract, mock/native/goose/opencode, canary
+    ├── loom-native     # native executor: tool loop, result projection, budgets, no-progress
+    └── loom-cli        # clap commands and output formatting
 ```
 
-边界：
+Boundaries:
 
-- `loom-core` 不依赖 `loom-store/tools/cli`。
-- `loom-tools` 依赖 `core` + `store`，不直接解析 CLI 参数。
-- `loom-cli` 只做参数解析、调用、输出、退出码。
-- 后续 `loom-context` / `loom-adapter-goose` 按同样边界添加。
+- `loom-core` does not depend on `loom-store/tools/cli`.
+- `loom-tools` depends on `core` + `store` and does not parse CLI arguments directly.
+- `loom-cli` only parses arguments, calls into the others, formats output, and sets exit codes.
+- Later `loom-context` / `loom-adapter-goose` are added under the same boundaries.
 
-## 4. 协议是契约
+## 4. The Protocol Is a Contract
 
-- `schemas/tool-result.v1.json` 是模型与工具之间的契约。
-- 改字段、短键含义、限额、退出码时，**必须同时更新**：
-  1. `loom-core` 类型；
-  2. `schemas/tool-result.v1.json`；
-  3. `doc/10-工具输出协议-v0.1.md`；
-  4. 至少一个测试或示例。
-- 只做增量字段；破坏性变更升 `v2`，不要静默改语义。
-- 生产端严格符合 schema；消费端忽略未知字段。
+- `schemas/tool-result.v1.json` is the contract between models and tools.
+- When changing fields, short-key meanings, limits, or exit codes, **you must update all of**:
+  1. the `loom-core` types;
+  2. `schemas/tool-result.v1.json`;
+  3. `doc/10-tool-output-protocol-v0.1.md`;
+  4. at least one test or example.
+- Incremental fields only; a breaking change bumps to `v2` — never silently change semantics.
+- Producers conform strictly to the schema; consumers ignore unknown fields.
 
-## 5. 工具端 token 预算
+## 5. Tool-Side Token Budget
 
-- 能在工具层裁掉的，不要留给 Headroom。
-- 工具输出默认“摘要 + 地址 + 预览”，全文落 artifact。
-- 三级预算：单次 8KB / 单次 invocation 24KB / 单 run 128KB。
-- 硬上限：16KB / 48KB / 256KB；配置只能调低，管理员才能提高。
-- 不返回原始 `rg --json`、HTML、ANSI、stack trace。
-- 每次调用写 `logs/tools.jsonl`，字段见 `doc/10` §8。
+- Cut at the tool layer whatever can be cut there; do not leave it to Headroom.
+- Tool output defaults to "summary + address + preview"; full text goes to an artifact.
+- Three-tier budget: 8KB per call / 24KB per invocation / 128KB per run.
+- Hard caps: 16KB / 48KB / 256KB; configuration may only lower them, only admins may raise them.
+- Never return raw `rg --json`, HTML, ANSI, or stack traces.
+- Every call writes to `logs/tools.jsonl`; fields are defined in `doc/10` §8.
 
-## 6. 状态与文件所有权
+## 6. State and File Ownership
 
-- `.loom/` 分两层，根 `.gitignore` 用**白名单**（`/.loom/*` + 反选，新增状态默认忽略）：
-  - **契约层** tracked：`README.md`、`goal.md`、`constraints.md`、`specs/`（ownership 表见 `.loom/README.md`）；
-  - **状态层** ignored：`tasks/`、`runs/`、`ledger/`、`snapshots/`、`locks/`、`config.toml`、`events.jsonl` 等，**不要提交**，也不要手改事实源（事件日志 append-only）。
-- orchestrator 是状态层唯一写者；worker 只写代码 + `outbox/`；契约层由人与控制面共同维护，走 git review（`loom goal` / `loom constraints` 起草，人审 diff，见 §10）。
-- 不要把状态层内容复制进 `doc/` 或测试夹具。
+- `.loom/` has two layers; the root `.gitignore` uses a **whitelist** (`/.loom/*` plus negations, so new state is ignored by default):
+  - **Contract layer**, tracked: `README.md` (and its `README.zh-CN.md` sibling), `goal.md`, `constraints.md`, `specs/` (ownership table in `.loom/README.md`);
+  - **State layer**, ignored: `tasks/`, `runs/`, `ledger/`, `snapshots/`, `locks/`, `config.toml`, `events.jsonl`, etc. — **never commit these**, and never hand-edit the source of truth (the event log is append-only).
+- The orchestrator is the only writer of the state layer; workers only write code + `outbox/`; the contract layer is maintained jointly by humans and the control plane and goes through git review (`loom goal` / `loom constraints` to draft, human reviews the diff, see §10).
+- Never copy state-layer content into `doc/` or test fixtures.
 
-## 7. 测试与质量
+## 7. Tests and Quality
 
-提交前至少：
+Before committing, at minimum:
 
 ```bash
 make check
 ```
 
-包括 `fmt --check`、`clippy -D warnings`、`cargo test --workspace`。
+which includes `fmt --check`, `clippy -D warnings`, and `cargo test --workspace`.
 
-新增行为优先写单元测试；涉及文件系统/搜索的，用临时目录，不依赖本机仓库内容。
+New behavior gets unit tests first; tests touching the filesystem/search use temp directories and do not depend on the local repository's contents.
 
-## 8. 文档与语言
+## 8. Docs and Language
 
-- 设计文档用中文；代码标识符、协议字段、错误码用英文。
-- 人类可读文本默认中文，`LOOM_LANG` 可切 `en` / `ja`。
-- 路径、符号、枚举不翻译。
-- 文档中的模型名、端口、CLI 参数均为示例，落地前以 `--help` 和官方文档为准。
+- **Docs are English-first**: human-readable documents use English as the primary file, with a `*.zh-CN.md` Chinese sibling linked from a language-switcher line right after the H1. Keep the two versions in sync; the English file is what outsiders see first.
+- **Agent-facing docs are English-only**: `AGENTS.md`, skills, and similar files that only AI reads are not duplicated in Chinese.
+- Code identifiers, protocol fields, and error codes are English.
+- CLI human-readable output defaults to Chinese and can be switched with `LOOM_LANG` (`en` / `ja`); this is runtime behavior, not docs.
+- Paths, symbols, and enums are never translated.
+- Model names, ports, and CLI arguments in docs are **examples/placeholders**; verify against `--help` and official docs before relying on them.
 
-### 8.1 回答与写作
+### 8.1 Answers and Writing
 
-- 回答先给结论，再给必要依据；不要空泛开场、彩虹屁或总结复述。
-- 具体优先：给路径、命令、`file:line` 和可验证结果；不确定就说不确定。
-- 保留限制、失败信息和真实的不确定性，不要为了顺滑而删掉。
-- 长文档按 `.opencode/skills/docs-writing/` 的规则处理；普通短回答不必加载该 skill。
+- Lead with the conclusion, then the necessary evidence; no empty openers, flattery, or restating summaries.
+- Prefer specifics: give paths, commands, `file:line`, and verifiable results; say "I don't know" when unsure.
+- Preserve limitations, failures, and real uncertainty; do not smooth them away for fluency.
+- Long documents follow the rules in `.opencode/skills/docs-writing/`; short ordinary answers do not need that skill loaded.
 
 ## 9. Git / GitHub
 
-- 远程是私有仓库；不要提交 secret、token、个人路径。
-- 提交信息用短祈使句，例如：
+- The remote is a private repository; never commit secrets, tokens, or personal paths.
+- Commit messages are short imperative sentences, e.g.:
   - `scaffold rust workspace`
   - `add tool result envelope`
   - `implement search and read tools`
-- 大改动前先确认设计文档已同步。
-- 不要用 `git push --force` 改写主分支历史，除非用户明确要求。
+- Confirm design docs are in sync before large changes.
+- Do not `git push --force` to rewrite main-branch history unless explicitly asked.
 
-## 10. 引导优于限制，责任归用户
+## 10. Guide Rather Than Restrict; Responsibility Sits with the User
 
-- 需要用户提供信息时，用命令 / workflow 引导生成（工具起草、人确认 diff），不输出“请按格式填写”的空模板让人手写。
-- 用户可以乱改、乱删、乱配置，后果由用户承担；**不为极端滥用在架构里到处加限制**。可恢复的误用（删导览文件、改配置、清本地状态）一律不管，靠 git / 重新 init 兜底。
-- 只有**工具内不可恢复**的破坏（清历史事件、覆盖未提交工作、删 tracked 契约）才必须醒目警告：一次说清后果与恢复方式；不拦截、不连环确认。
-- “限制”与 “fail fast” 的边界：**注定无法成功的路径**（例如 spec 被 gitignore 后仍派发）直接报错并说明改法，这不算限制；**用户能做成的路径**不要拦。
-- 本条约束的是对**人的**限制；agent 侧守卫（write 守卫、scope gate、重试熔断）不受影响——防的是 agent 漂移，不是用户滥用。
+- When information from the user is needed, generate it through commands/workflows (tools draft, humans review the diff); never output "please fill in this template" for humans to hand-write.
+- Users may edit, delete, or configure anything; the consequences are theirs. **Do not scatter restrictions through the architecture for extreme abuse.** Recoverable misuse (deleting onboarding docs, editing config, clearing local state) is left alone, covered by git / re-init.
+- Only unrecoverable destruction **inside a tool** (wiping event history, overwriting uncommitted work, deleting tracked contracts) warrants a prominent warning: state the consequence and the recovery path once; do not block, do not chain confirmations.
+- Boundary of "restriction" vs "fail fast": paths that **cannot possibly succeed** (e.g. a spec that is gitignored yet dispatched) fail immediately with an explanation — that is not a restriction; paths the **user can accomplish** are never blocked.
+- This clause constrains restrictions on **humans**; agent-side guards (write guards, scope gates, retry circuit-breakers) are unaffected — they defend against agent drift, not user abuse.
 
-## 11. 当前里程碑（M0）
+## 11. Current Milestone (M0)
 
-已完成/进行中：
+Done / in progress:
 
-1. workspace + 容器化开发环境；
-2. 工具 envelope + `search`/`read`/`artifact`；
-3. telemetry 与三级预算；
-4. 模型能力位 + 请求账本 + CPVT/TPVT/WPT；
-5. TaskSpec / 事件日志 / 任务索引与状态重放；
-6. Context Compiler（稳定前缀、硬预算、失败包、manifest）+ 版本化 prompt 库；
-7. 进程级 adapter 契约、mock adapter、goose/opencode preset、adapter canary；
-8. `dispatch` / `verify` / `resume` 最小闭环（mock 端到端通过）；
-9. native executor（M2 起步）：OpenAI-compatible 工具循环、read/search/edit/write/bash、结果投影到 artifact、token/墙钟/步数/成本预算、acceptance 失败回灌、上一 run 失败包注入、no-progress、脚本化 provider 测试、`--adapter native` 端到端通过。
-10. 控制面路由（M3 起步）：`[routing]` role→tier、verify 失败升级、tier 成本护栏、派发前最坏成本检查、`loom route` 解释命令、`loom route stats` worker 占比与切换统计、同层 fallback 自动切换（`task.fallback` + 独立 run）；`task.escalated` 与 `TaskDispatched.data.route` 已接线。
-11. M4 并行（2026-11-08 完成）：路径锁（owner/lease/pid，RAII 只释放自己写过的路径，死 owner 回收）、`dispatch`/`verify` 加锁、`task.blocked(code=lock_owner/parallel_cap/inflight_budget)`、`[parallel] max_running`（默认 2）与 `max_inflight_cost_usd`、`loom merge` 合并队列（全局 `**` 锁、合并前 verify、rebase、集成 verify、失败回滚、清理 worktree/分支）、`loom board` 看板、JSONL 单写与 run id 原子预留；`scripts/smoke-parallel.sh` 实测 2 并发 10 任务 0 失败 10 合并。
+1. workspace + containerized dev environment;
+2. tool envelope + `search`/`read`/`artifact`;
+3. telemetry and the three-tier budget;
+4. model capability bits + request ledger + CPVT/TPVT/WPT;
+5. TaskSpec / event log / task index and state replay;
+6. Context Compiler (stable prefix, hard budgets, failure packets, manifest) + versioned prompt library;
+7. process-level adapter contract, mock adapter, goose/opencode presets, adapter canary;
+8. the `dispatch` / `verify` / `resume` minimal loop (mock end-to-end passing);
+9. native executor (M2 start): OpenAI-compatible tool loop, read/search/edit/write/bash, result projection to artifacts, token/wall-clock/step/cost budgets, acceptance-failure feedback, previous-run failure-packet injection, no-progress, scripted provider tests, `--adapter native` end-to-end passing.
+10. control-plane routing (M3 start): `[routing]` role→tier, verify-failure escalation, tier cost guards, worst-case cost check before dispatch, the `loom route` explain command, `loom route stats` worker share and switch counts, same-tier fallback auto-switching (`task.fallback` + a separate run); `task.escalated` and `TaskDispatched.data.route` are wired up.
+11. M4 parallelism (completed 2026-11-08): path locks (owner/lease/pid, RAII releasing only paths it wrote, dead-owner reclamation), locking in `dispatch`/`verify`, `task.blocked(code=lock_owner/parallel_cap/inflight_budget)`, `[parallel] max_running` (default 2) and `max_inflight_cost_usd`, the `loom merge` queue (global `**` lock, verify before merge, rebase, integration verify, rollback on failure, worktree/branch cleanup), the `loom board` kanban, JSONL single-writer and atomic run-id reservation; `scripts/smoke-parallel.sh` measured 10 tasks at 2 concurrent with 0 failures and 10 merges.
 
-下一步：
+Next:
 
-1. 补容器镜像/挂载：goose、opencode、curl、可选 LiteLLM；
-2. 真实 goose/OpenCode adapter canary（需安装二进制）；
-3. native vs adapter A/B（同任务集，按 CPVT/TPVT/墙钟）；
-4. 用真实仓库校准 `tool_output_ratio` / `spill_rate` / 成本估算；
-5. 真实仓库的合并冲突率统计（3 并行 A/B 已用 `scripts/ab-parallel.sh` 实测：wall 13s→6s、tokens 仅 +5.8%、cache 48%→89%，见 `doc/08` §9.5）；
-6. 记录 CPVT/TPVT/WPT 基线（首版已出：`scripts/ab-parallel.sh --report` 含 wall/TPVT/CPVT 三列，见 `doc/08` §9.5；价格表 `scripts/model-prices.sh`；待多轮/多模型扩充）。
+1. container image/mounts for goose, opencode, curl, optional LiteLLM;
+2. real goose/OpenCode adapter canary (requires installed binaries);
+3. native vs adapter A/B (same task set, by CPVT/TPVT/wall-clock);
+4. calibrate `tool_output_ratio` / `spill_rate` / cost estimates against a real repository;
+5. merge-conflict-rate statistics on a real repository (3-way parallel A/B already measured with `scripts/ab-parallel.sh`: wall 13s→6s, tokens only +5.8%, cache 48%→89%, see `doc/08` §9.5);
+6. record CPVT/TPVT/WPT baselines (first version shipped: `scripts/ab-parallel.sh --report` has wall/TPVT/CPVT columns, see `doc/08` §9.5; price table in `scripts/model-prices.sh`; pending more rounds/models).
 
-当前卡点详见 `doc/14-当前问题与卡点.md`。
+Current blockers are tracked in `doc/14-current-issues-and-blockers.md`.
 
-**已设计待实现**：
+**Designed but not implemented**:
 
-- 多仓库工作区/多端协同（manifest 成员仓库、`loom workspace *`、跨成员同名分支 worktree），见 `doc/13-多仓库工作区与多端协同.md`（M5，P0–P3）。
-- 运行时治理与工程化（已实现：步骤级上下文投影 `loom-native/src/project.rs` + `scripts/smoke-churn.sh`，patch-first/write 守卫，步骤级 token 归因 + `logs/churn.json` + `loom churn stats`；仍待做——L1–L3 分级干预、`questions.json` + attention inbox、skills 扫描/按需加载/验证晋升、agent/harness 驱动的本地 CI 与 hooks/review/attestation——见 `doc/15-Agent运行时治理与工程化.md`）。
+- Multi-repo workspace / multi-client collaboration (manifest member repos, `loom workspace *`, cross-member same-name-branch worktrees), see `doc/13-multi-repo-workspace-and-multi-client.md` (M5, P0–P3).
+- Runtime governance and engineering (implemented: step-level context projection `loom-native/src/project.rs` + `scripts/smoke-churn.sh`, patch-first/write guards, step-level token attribution + `logs/churn.json` + `loom churn stats`; still pending — L1–L3 graded intervention, `questions.json` + attention inbox, skills scan/on-demand load/verified promotion, agent/harness-driven local CI and hooks/review/attestation — see `doc/15-agent-runtime-governance-and-engineering.md`).
 
-**方向与提案（未实施）**：
+**Directions and proposals (not implemented)**:
 
-- 工作区开发环境隔离：Windows/Linux/macOS 三平台、A+B 层无虚拟化、复用 `.mise.toml` 等既有声明、容器降级为可选 profile；不做通用环境管理器。见 `doc/17-工作区开发环境隔离.md`。
-- Agent 协作工作法：六十年流程史的存活原则（小步、短反馈、验证前置于合并、限在制品、状态外置、预算代估点）重排节奏，人的参与收敛为定向/开批/审片/接升级四个介入点，配套 `loom plan`；不做自动规划与仪式。见 `doc/18-Agent协作工作法提案.md`。
+- Workspace dev-environment isolation: three platforms (Windows/Linux/macOS), A+B layers without virtualization, reusing existing declarations like `.mise.toml`, containers demoted to an optional profile; not a general environment manager. See `doc/17-workspace-dev-environment-isolation.md`.
+- Agent collaboration working method: surviving principles from sixty years of process history (small steps, short feedback, verification before merge, limiting work in progress, externalized state, budget-based estimation) re-sequenced, human participation collapsed into four intervention points (direction-setting, batch-opening, review-slicing, taking escalations), companion `loom plan`; no auto-planning or ceremony. See `doc/18-agent-collaboration-workflow-proposal.md`.
 
-**不要提前做**：embedding/向量库、MCP、跨项目知识库、自动规划、并行调度、把成员仓库合并成 monorepo。
+**Do not do early**: embeddings/vector stores, MCP, cross-project knowledge bases, auto-planning, parallel scheduling, merging member repos into a monorepo.

@@ -1,5 +1,7 @@
 # 03 核心协议
 
+> 语言：[English](03-core-protocols.md) | **简体中文**
+
 > 这份文档是 Loom 的“接口契约”。实现可以换语言、换 runtime，但协议编号与字段语义要保持稳定。所有**跨边界** JSON 都有 `schema_version`，所有跨边界内容都必须可校验。
 
 ## 1. `.agent/` 目录布局

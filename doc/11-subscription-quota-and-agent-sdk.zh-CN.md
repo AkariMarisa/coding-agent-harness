@@ -1,7 +1,9 @@
 # 11-订阅额度与 Agent SDK 对接
 
+> 语言：[English](11-subscription-quota-and-agent-sdk.md) | **简体中文**
+
 > **2026-11-05 调研笔记。状态：待本机验证。**  
-> 本文补充 [08](08-设计路线-v0.2.md) 与 [10](10-工具输出协议-v0.1.md)，不改变“进程 + 文件 + JSON + exit code”的核心契约。  
+> 本文补充 [08](08-design-roadmap-v0.2.zh-CN.md) 与 [10](10-tool-output-protocol-v0.1.zh-CN.md)，不改变“进程 + 文件 + JSON + exit code”的核心契约。  
 > 结论：**订阅是一条独立的认证 / 计费 / 限流 lane，不是 API 的便宜镜像。** 不能假设它能透明穿过 Headroom / LiteLLM。
 
 > **优先级更新（2026-11-05）：后置。** 当前先用 API key 跑通 API lane（GPT + DeepSeek/Kimi/MiniMax/MiMo 等 key 均可提供）；M0/M1 不实现订阅，也不要求安装/登录 codex / claude。本文保留为后续设计调研，不阻塞主线；前期投入订阅对接不划算。
@@ -192,7 +194,7 @@ pub enum BillingMode {
 | `gateway` | `direct` / `litellm` / `headroom+litellm` |
 | `allow_api_fallback` | 额度耗尽时是否允许切 API，默认 `false` |
 
-同一 `credential_lane` 还关联一组 **模型能力位**（`tier` / `thinking_mode` / `reasoning_passthrough` / `wire` / 输入/缓存/输出价格 / `model_id` 等）。配置定义见 [06](06-技术选型.md) §5.6，成本口径见 [04](04-上下文与成本模型.md) §6.5。调度器按能力位过滤，不按模型名写死。
+同一 `credential_lane` 还关联一组 **模型能力位**（`tier` / `thinking_mode` / `reasoning_passthrough` / `wire` / 输入/缓存/输出价格 / `model_id` 等）。配置定义见 [06](06-technology-selection.zh-CN.md) §5.6，成本口径见 [04](04-context-and-cost-model.zh-CN.md) §6.5。调度器按能力位过滤，不按模型名写死。
 
 ### 5.2 Adapter 能力声明
 

@@ -1,8 +1,10 @@
 # 13 多仓库工作区与多端协同
 
+> 语言：[English](13-multi-repo-workspace-and-multi-client.md) | **简体中文**
+
 > 状态：**设计稿，未实现**（2026-11-06）。  
 > 目标：让"一个顶级目录 + 多端仓库 + 多个 agent"变成一个可控的 Loom 工作区，而不是三四个互不通讯的会话。  
-> 前置阅读：[08-设计路线-v0.2.md](08-设计路线-v0.2.md) §4（状态所有权）、[03-核心协议.md](03-核心协议.md)（TaskSpec/事件/回执）。
+> 前置阅读：[08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md) §4（状态所有权）、[03-core-protocols.zh-CN.md](03-core-protocols.zh-CN.md)（TaskSpec/事件/回执）。
 
 ## 0. 一句话结论
 
@@ -74,7 +76,7 @@ workspace = 1 个控制面（Loom 状态/任务/事件） + N 个成员 checkout
 | D4 | 跨仓库任务 = **同名分支聚合 worktree** | `.workspaces/<task_id>/<member>/`，每个成员都是自己仓库的 worktree；默认**单成员任务**，多成员任务是例外 |
 | D5 | 跨端同步 = 事件日志 + 依赖 + 回执 | 不引入 agent 互聊、不引入 MCP（沿用 D2 进程级契约） |
 | D6 | 分支命名 `agent/<task_id>` 跨成员统一 | 合并对齐、冲突定位、`task.merged` 事件可记录 per-member sha |
-| D7 | 结构化状态走 CLI JSON，不走 MCP 插件 | 与 [08](08-设计路线-v0.2.md) D2 一致：稳定契约是进程 + 文件 + JSON + exit code |
+| D7 | 结构化状态走 CLI JSON，不走 MCP 插件 | 与 [08](08-design-roadmap-v0.2.zh-CN.md) D2 一致：稳定契约是进程 + 文件 + JSON + exit code |
 | D8 | 顶层 goal/constraints 只写**平台级**；端特有约束进 `.loom/specs/<end>/`；成员仓库可携带自己的 `.loom/goal.md` / `constraints.md`，dispatch 按任务所属成员仓库选择 | 顶层避免杂物化（goal/constraints 每步重注入、各有 1000 token cap，`loom doctor` 超 cap 警告）；成员独立工作时上下文自足。**未实现，M5 落地** |
 
 ## 4. 目录布局
@@ -156,7 +158,7 @@ allowed_cross_members = ["frontend", "backend"]   # 允许出现在多成员任�
 | `members[].verify` | 否 | 成员级集成验收命令 |
 | `defaults.allowed_cross_members` | 否 | 多成员任务的白名单 |
 
-> manifest 提交到 git（它是"人与工具的契约"）；`.loom/` 不提交（它是运行时状态）。这与 [03](03-核心协议.md) §1.1 的提交/忽略表一致。
+> manifest 提交到 git（它是"人与工具的契约"）；`.loom/` 不提交（它是运行时状态）。这与 [03](03-core-protocols.zh-CN.md) §1.1 的提交/忽略表一致。
 
 ## 6. 协议增量（向后兼容）
 
@@ -339,7 +341,7 @@ T-005 [frontier, review]  集成 verify（跨端联调验收）
 | 上下文里混入多仓库全量状态 | Context Compiler 的"依赖摘要"按成员折叠：`frontend@agent/T-... [passed]` 一行一个 |
 | worktree 重复装依赖 | `setup` 命令 + 包管理器缓存（pnpm store / cargo target 共享），必要时每成员 `target/` 共享挂载 |
 
-原则不变（[04](04-上下文与成本模型.md) §3）：**结构化、按引用、可折叠**；多仓库不新增"聊天"这一层。
+原则不变（[04](04-context-and-cost-model.zh-CN.md) §3）：**结构化、按引用、可折叠**；多仓库不新增"聊天"这一层。
 
 ## 10. 风险与开放问题
 
@@ -349,7 +351,7 @@ T-005 [frontier, review]  集成 verify（跨端联调验收）
 | 分支不可见（agent 工具不认新布局） | 根因是 cwd 归属而非 worktree，实测与硬约束见 §7.1：dispatch 强制 worker cwd 落成员 checkout；聚合目录靠 `workspace status --json` |
 | 跨成员任务的 `allowed_paths` 命名空间 | 待定：`member:path` 前缀 vs 每成员一个 workspace 对象（倾向后者，见 §11 P1） |
 | 合并顺序导致中间态坏掉 | 集成 verify 作为门禁；跨端任务合并顺序由 orchestrator 排（契约任务先合） |
-| 成员仓库被 agent 误改 `.loom`/manifest | 沿用 [08](08-设计路线-v0.2.md) §4.3 防覆写：受保护路径 + 派发前后哈希比对 |
+| 成员仓库被 agent 误改 `.loom`/manifest | 沿用 [08](08-design-roadmap-v0.2.zh-CN.md) §4.3 防覆写：受保护路径 + 派发前后哈希比对 |
 | manifest 与 `.loom` 的版本漂移 | `loom doctor` 校验 manifest schema 与成员可达性 |
 | 与 monorepo 的迁移路径 | manifest 单成员即 monorepo；不需要特殊改造 |
 
@@ -366,7 +368,7 @@ T-005 [frontier, review]  集成 verify（跨端联调验收）
 
 ## 12. 与现有文档的关系
 
-- [03](03-核心协议.md)：只加可选字段（§6），核心语义不变；
-- [08](08-设计路线-v0.2.md) §4 目录布局：`.worktrees/` 扩展为 `.workspaces/<task>/<member>/`（单成员兼容旧路径）；路线图表加 M5 行；
-- [04](04-上下文与成本模型.md)：Context Compiler 的依赖摘要按成员折叠；
+- [03](03-core-protocols.zh-CN.md)：只加可选字段（§6），核心语义不变；
+- [08](08-design-roadmap-v0.2.zh-CN.md) §4 目录布局：`.worktrees/` 扩展为 `.workspaces/<task>/<member>/`（单成员兼容旧路径）；路线图表加 M5 行；
+- [04](04-context-and-cost-model.zh-CN.md)：Context Compiler 的依赖摘要按成员折叠；
 - 本设计不改变 D1–D3（控制面自研、进程级契约、状态是数据库）。

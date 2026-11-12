@@ -1,8 +1,10 @@
 # 15 Agent 运行时治理与工程化
 
+> 语言：[English](15-agent-runtime-governance-and-engineering.md) | **简体中文**
+
 > 状态：**设计稿，未实现**（2026-11-07）。
 > 范围：四个已观察问题——写入抖动、提问阻塞与人工事项可见性、skills 治理、agent/harness 驱动的本地 CI。
-> 前置阅读：[08-设计路线-v0.2.md](08-设计路线-v0.2.md)（状态所有权 / adapter 契约）、[03-核心协议.md](03-核心协议.md)（TaskSpec / 回执 / 事件）、[10-工具输出协议-v0.1.md](10-工具输出协议-v0.1.md)（工具与 telemetry）、[14-当前问题与卡点.md](14-当前问题与卡点.md)（当前环境限制）。
+> 前置阅读：[08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md)（状态所有权 / adapter 契约）、[03-core-protocols.zh-CN.md](03-core-protocols.zh-CN.md)（TaskSpec / 回执 / 事件）、[10-tool-output-protocol-v0.1.zh-CN.md](10-tool-output-protocol-v0.1.zh-CN.md)（工具与 telemetry）、[14-current-issues-and-blockers.zh-CN.md](14-current-issues-and-blockers.zh-CN.md)（当前环境限制）。
 
 ---
 
@@ -27,7 +29,7 @@
 2. **question protocol + attention inbox**：当前 `needs_input` 会被 verify 记成 `task.failed`，属于正确性缺陷；同时把“人需要处理的事项”从聊天历史里拿出来，做成常驻可见的 inbox。
 3. **churn 治理**：先做 native 的步骤级上下文重编译 + patch-first + token 归因；拦截写入只是最后一道闸。外部 adapter 只能做粗粒度 watchdog 和选型。
 4. **本地 CI 前移**：pre-commit/pre-push、确定性自动修复、review job、attestation，把能本地解决的检查挡在提交/推送前，减少服务器 CI 的重复劳动。
-5. **skills 治理**：扫描/加载/静态检查可以先做；CI job 模板与 review 规则可以作为 skill 的早期落点；**晋升评估依赖真实模型与固定任务集**，当前仍受 [14](14-当前问题与卡点.md) 的环境卡点限制。
+5. **skills 治理**：扫描/加载/静态检查可以先做；CI job 模板与 review 规则可以作为 skill 的早期落点；**晋升评估依赖真实模型与固定任务集**，当前仍受 [14](14-current-issues-and-blockers.zh-CN.md) 的环境卡点限制。
 
 明确不做：全局安装 skill、联网自动装 skill、embedding/向量检索、交互式等待、为每个问题调用一次 LLM、v1 嵌套容器。
 
@@ -72,7 +74,7 @@ churn 的浪费不在磁盘，而在**请求历史**。一次“删除后重写�
 
 #### A. 步骤级上下文重编译（最大杠杆）
 
-把 native 从“长会话”改成“每步重新编译有界上下文”，这也符合 [08](08-设计路线-v0.2.md) 原本的 Context Compiler 原则：
+把 native 从“长会话”改成“每步重新编译有界上下文”，这也符合 [08](08-design-roadmap-v0.2.zh-CN.md) 原本的 Context Compiler 原则：
 
 ```text
 [稳定前缀] system + task + AC + 当前 skill 索引
@@ -285,7 +287,7 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
       "status": "open",
       "title": "容器内缺少 goose，无法跑 adapter canary",
       "detail": "PATH 中未找到 goose；先补镜像或挂载二进制",
-      "refs": ["doc/14-当前问题与卡点.md#2", "artifact:adapter-canary-3"],
+      "refs": ["doc/14-current-issues-and-blockers.zh-CN.md#2", "artifact:adapter-canary-3"],
       "task_id": null,
       "run_id": null,
       "dedupe_key": "env:missing-tool:goose",
@@ -581,7 +583,7 @@ review / verify 可以检查假设是否被后续证据推翻。这样“先继�
 参考 [基于仓库特征推荐安装 Agent Skill](https://yb.tencent.com/s/DsY6aNRnbq6v) 的分层：**Scanner（零 LLM 扫描）→ Catalog（离线索引）→ Resolver（打分）→ Installer（项目级安装）→ Runtime（渐进披露）**。这套分层与 Loom 的“状态外置 + 按引用交付 + 上下文硬预算”一致，采纳；但做两处收紧：
 
 1. **不做全局安装**，只装项目级并写 lock；
-2. **v1 不做 embedding 检索、不做联网自动安装**，与 [09](09-代码检索与知识库.md) 的 R0/R1 边界一致。
+2. **v1 不做 embedding 检索、不做联网自动安装**，与 [09](09-code-search-and-knowledge-base.zh-CN.md) 的 R0/R1 边界一致。
 
 skill 的第一个真实使用场景不是“装一堆能力”，而是本地 CI 的 review/检查模板（§4.9）：仓库画像决定推荐什么，lock 保证可复现，静态检查限制权限，L2 评估决定能否从 advisory 升为 gate。
 
@@ -907,7 +909,7 @@ timeout_s = 120
 - 允许 `env`，但默认清空 `LOOM_API_KEY` / `OPENAI_API_KEY` 等 secret；
 - 日志写 `.loom/ci/<run_id>/<job>.log`，按 8KB/24KB 预算截断后回给 agent，全文留 artifact。
 
-> 字段形态说明：本节示例是完整设计，用 `[jobs.<id>]` + `cmd`，只用于解释字段语义。[16](16-运行时治理落地评估.md) §7.3 已锁定 v1 实现子集：`[[jobs]]` + `argv` + `[runner]`，字段名为 `fix_argv`/`fix_safe`，不含 `kind`/`env`/`network`，也不含 review/skill job。实现时按 16 §7.3，不要同时支持两套。
+> 字段形态说明：本节示例是完整设计，用 `[jobs.<id>]` + `cmd`，只用于解释字段语义。[16](16-runtime-governance-adoption-assessment.zh-CN.md) §7.3 已锁定 v1 实现子集：`[[jobs]]` + `argv` + `[runner]`，字段名为 `fix_argv`/`fix_safe`，不含 `kind`/`env`/`network`，也不含 review/skill job。实现时按 16 §7.3，不要同时支持两套。
 
 全局配置（`.loom/config.toml`）：
 
@@ -1127,7 +1129,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 注意：
 
 - 当前没有并发/锁，P2 的“父子 agent 不等待”只定义协议，不实现并行调度；M4 再做。
-- 真实 goose/OpenCode canary 仍受二进制与 API key 阻塞，见 [14](14-当前问题与卡点.md)。
+- 真实 goose/OpenCode canary 仍受二进制与 API key 阻塞，见 [14](14-current-issues-and-blockers.zh-CN.md)。
 - churn 优化的是 `messages` 投影与工具形态，不改 provider 请求格式；外部 adapter 只能观察 worktree，不能逐步投影。
 - attention inbox 不依赖真实模型，应和 question protocol 一起先做；否则即使 `needs_input` 修对了，用户仍然找不到待办。
 - CI 前移与服务器跳过是两步：先本地跑起来，再谈 attestation；不要在没有可信 tree/工具版本记录前就跳过服务器检查。
@@ -1213,4 +1215,4 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 ## 10. 落地评估
 
-基于当前代码的接入点、契约变更、分期人日与风险，以及三处需要先修正的设计（`.loom.ci.toml` 位置与归属、attestation 授权、`verify` 的 claim/`needs_input` 语义），见 [16-运行时治理落地评估.md](16-运行时治理落地评估.md)。
+基于当前代码的接入点、契约变更、分期人日与风险，以及三处需要先修正的设计（`.loom.ci.toml` 位置与归属、attestation 授权、`verify` 的 claim/`needs_input` 语义），见 [16-runtime-governance-adoption-assessment.zh-CN.md](16-runtime-governance-adoption-assessment.zh-CN.md)。

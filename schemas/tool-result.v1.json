@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://loom.dev/schemas/tool-result.v1.json",
   "title": "Loom Tool Result Envelope v1",
-  "description": "工具返回给模型的紧凑信封。全文落 artifact，items 只放地址与预览。",
+  "description": "Compact envelope returned by tools to the model. Full text spills to an artifact; items carry only addresses and previews.",
   "type": "object",
   "required": ["v", "ok", "tool"],
   "additionalProperties": false,
   "properties": {
     "v": {
       "const": 1,
-      "description": "协议版本；缺失时按 v1 处理。"
+      "description": "Protocol version; treated as v1 when absent."
     },
     "ok": {
       "type": "boolean"
@@ -34,7 +34,7 @@
     "summary": {
       "type": "string",
       "maxLength": 300,
-      "description": "一行人类可读摘要，按 LOOM_LANG 本地化。"
+      "description": "One-line human-readable summary, localized by LOOM_LANG."
     },
     "items": {
       "type": "array",
@@ -43,12 +43,12 @@
     },
     "text": {
       "type": "string",
-      "description": "read/artifact/log 等工具的有界正文；全文仍在 ref 指向的 artifact 中。"
+      "description": "Bounded body from read/artifact/log tools; the full text remains in the artifact that ref points to."
     },
     "ref": {
       "type": "string",
       "pattern": "^artifacts/[A-Za-z0-9._-]+$",
-      "description": "相对 run 目录的 artifact 路径。"
+      "description": "Artifact path relative to the run directory."
     },
     "truncated": {
       "type": "boolean"
@@ -56,11 +56,11 @@
     "next": {
       "type": "string",
       "maxLength": 200,
-      "description": "opaque 分页游标；仅在 truncated=true 时出现。"
+      "description": "Opaque pagination cursor; present only when truncated=true."
     },
     "unchanged": {
       "type": "boolean",
-      "description": "同一 run 内相同内容已返回过；此时 items 可省略。"
+      "description": "The same content was already returned within this run; items may be omitted."
     },
     "stats": {
       "$ref": "#/$defs/stats"
@@ -101,24 +101,24 @@
         "p": {
           "type": "string",
           "maxLength": 1024,
-          "description": "仓库相对路径。"
+          "description": "Repository-relative path."
         },
         "b": {
           "type": "string",
           "pattern": "^[0-9a-f]{7,64}$",
-          "description": "内容哈希（git blob 或 sha256 前缀）。"
+          "description": "Content hash (git blob or sha256 prefix)."
         },
         "r": {
           "type": "array",
           "minItems": 2,
           "maxItems": 2,
           "items": { "type": "integer", "minimum": 1 },
-          "description": "1-based 闭区间行号 [start, end]。"
+          "description": "1-based closed-interval line numbers [start, end]."
         },
         "s": {
           "type": "string",
           "maxLength": 300,
-          "description": "符号名。"
+          "description": "Symbol name."
         },
         "k": {
           "type": "string",
@@ -127,7 +127,7 @@
         "x": {
           "type": "string",
           "maxLength": 400,
-          "description": "单行预览；UTF-8 字符边界截断。"
+          "description": "Single-line preview; truncated at UTF-8 character boundaries."
         },
         "sc": {
           "type": "number",
@@ -137,22 +137,22 @@
         "n": {
           "type": "integer",
           "minimum": 0,
-          "description": "总数/子项数/总行数，按 t 解释。"
+          "description": "Total count / sub-item count / total line count, interpreted per t."
         },
         "a": {
           "type": "integer",
           "minimum": 0,
-          "description": "新增行数。"
+          "description": "Number of added lines."
         },
         "d": {
           "type": "integer",
           "minimum": 0,
-          "description": "删除行数。"
+          "description": "Number of deleted lines."
         },
         "l": {
           "type": "string",
           "maxLength": 20,
-          "description": "语言标识，如 rust/ts/py。"
+          "description": "Language identifier, e.g. rust/ts/py."
         }
       }
     },
@@ -163,25 +163,25 @@
         "n": {
           "type": "integer",
           "minimum": 0,
-          "description": "结果总数（不是本次返回数）。"
+          "description": "Total number of results (not the number returned this time)."
         },
         "bytes": {
           "type": "integer",
           "minimum": 0,
-          "description": "本信封实际 UTF-8 字节数。"
+          "description": "Actual UTF-8 byte size of this envelope."
         },
         "tok": {
           "type": "integer",
           "minimum": 0,
-          "description": "token 估算值，非精确值。"
+          "description": "Estimated token count, not exact."
         },
         "spill": {
           "type": "boolean",
-          "description": "全文是否落 artifact。"
+          "description": "Whether the full text spilled to an artifact."
         },
         "dedupe": {
           "type": "boolean",
-          "description": "是否命中本次 run 的去重集合。"
+          "description": "Whether it hit this run's dedup set."
         }
       }
     },
@@ -193,12 +193,12 @@
         "u": {
           "type": "integer",
           "minimum": 0,
-          "description": "已用字节。"
+          "description": "Bytes used."
         },
         "l": {
           "type": "integer",
           "minimum": 1,
-          "description": "限额字节。"
+          "description": "Byte limit."
         },
         "p": {
           "type": "integer",
@@ -210,7 +210,7 @@
           "enum": ["call", "invocation", "run"]
         }
       },
-      "description": "仅在用量达到 75% 后出现。"
+      "description": "Present only after usage reaches 75%."
     },
     "error": {
       "type": "object",
@@ -235,12 +235,12 @@
         "hint": {
           "type": "string",
           "maxLength": 200,
-          "description": "下一步建议，例如 read --range 1:200。"
+          "description": "Suggested next step, e.g. read --range 1:200."
         },
         "detail": {
           "type": "string",
           "maxLength": 500,
-          "description": "一行诊断；禁止 stack trace。"
+          "description": "One-line diagnostic; stack traces are forbidden."
         }
       }
     }

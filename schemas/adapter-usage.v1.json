@@ -21,11 +21,11 @@
     "status": {"type": "integer", "minimum": 0, "maximum": 599},
     "source": {"type": "string"},
     "step": {"type": "integer", "minimum": 1, "description": "1-based step inside the run; absent for one-shot requests."},
-    "model_id": {"type": "string", "minLength": 1, "description": "真实 provider 模型 id；model 是配置别名。"},
-    "tool_names": {"type": "array", "items": {"type": "string"}, "description": "本步模型调用的工具名（不含 finish）。"},
-    "write_paths": {"type": "array", "items": {"type": "string"}, "description": "本步整文件写入的路径（edit 不算）。"},
-    "rewrite_count": {"type": "integer", "minimum": 0, "description": "本步对已写文件的重复整文件覆盖次数。"},
-    "history_bytes": {"type": "integer", "minimum": 0, "description": "投影前的序列化历史字节数。"},
-    "projected_bytes": {"type": "integer", "minimum": 0, "description": "实际发送的序列化历史字节数。"}
+    "model_id": {"type": "string", "minLength": 1, "description": "Real provider model id; `model` is the config alias."},
+    "tool_names": {"type": "array", "items": {"type": "string"}, "description": "Tool names the model called at this step (excluding finish)."},
+    "write_paths": {"type": "array", "items": {"type": "string"}, "description": "Paths written as whole files at this step (edit does not count)."},
+    "rewrite_count": {"type": "integer", "minimum": 0, "description": "Number of repeated whole-file overwrites of already-written files at this step."},
+    "history_bytes": {"type": "integer", "minimum": 0, "description": "Serialized history size in bytes before projection."},
+    "projected_bytes": {"type": "integer", "minimum": 0, "description": "Serialized history size in bytes actually sent."}
   }
 }

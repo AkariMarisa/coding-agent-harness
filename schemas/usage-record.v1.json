@@ -2,36 +2,36 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://loom.dev/schemas/usage-record.v1.json",
   "title": "Loom Usage Record v1",
-  "description": "请求级账本行。追加写入 .loom/ledger/requests.jsonl；聚合结果由原始行重算。",
+  "description": "Request-level ledger row. Appended to .loom/ledger/requests.jsonl; aggregates are recomputed from raw rows.",
   "type": "object",
   "required": ["v", "ts_ms", "run_id", "cost_source", "source"],
   "additionalProperties": false,
   "properties": {
     "v": {
       "const": 1,
-      "description": "账本协议版本。"
+      "description": "Ledger protocol version."
     },
     "ts_ms": {
       "type": "integer",
       "minimum": 0,
-      "description": "Unix 毫秒时间戳。"
+      "description": "Unix timestamp in milliseconds."
     },
     "run_id": {
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
-      "description": "请求所属 run；缺失视为未归因。"
+      "description": "Run the request belongs to; absent means unattributed."
     },
     "task_id": {
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
-      "description": "请求所属任务；缺失时计入 unattributed。"
+      "description": "Task the request belongs to; absent counts as unattributed."
     },
     "attempt": {
       "type": "integer",
       "minimum": 0,
-      "description": "同一任务的重试/fallback 序号；每次请求单独一行。"
+      "description": "Retry/fallback sequence number within the same task; one row per request."
     },
     "tier": {
       "type": "string",
@@ -40,12 +40,12 @@
     "model_alias": {
       "type": "string",
       "minLength": 1,
-      "description": "配置中的模型别名，用于路由对账。"
+      "description": "Model alias from config, used for routing reconciliation."
     },
     "model_id": {
       "type": "string",
       "minLength": 1,
-      "description": "真实 provider 模型 id；不要只用别名对账。"
+      "description": "Real provider model id; do not reconcile on the alias alone."
     },
     "provider": {
       "type": "string",
@@ -54,17 +54,17 @@
     "wire": {
       "type": "string",
       "enum": ["chat", "responses", "messages"],
-      "description": "请求使用的 wire protocol；决定网关/计费覆盖。"
+      "description": "Wire protocol used by the request; determines gateway/billing coverage."
     },
     "input_tokens": {
       "type": "integer",
       "minimum": 0,
-      "description": "规范化输入 token 总数，包含 cached_input_tokens。"
+      "description": "Normalized total input tokens, including cached_input_tokens."
     },
     "cached_input_tokens": {
       "type": "integer",
       "minimum": 0,
-      "description": "命中缓存的输入 token；必须 <= input_tokens。"
+      "description": "Cache-hit input tokens; must be <= input_tokens."
     },
     "output_tokens": {
       "type": "integer",
@@ -73,22 +73,22 @@
     "reasoning_tokens": {
       "type": "integer",
       "minimum": 0,
-      "description": "推理 token；通常包含在 output_tokens 中，仅作诊断，不重复计费。"
+      "description": "Reasoning tokens; usually included in output_tokens, diagnostic only, not billed twice."
     },
     "cost_usd": {
       "type": "number",
       "minimum": 0,
-      "description": "实际或估算成本；来源由 cost_source 标记。"
+      "description": "Actual or estimated cost; the source is marked by cost_source."
     },
     "cost_source": {
       "type": "string",
       "enum": ["provider", "pricing_table", "manual", "unknown"],
-      "description": "provider 账单优先；pricing_table 表示本地能力位估算。"
+      "description": "Provider billing takes precedence; pricing_table means a local capability-bit estimate."
     },
     "source": {
       "type": "string",
       "enum": ["provider", "litellm", "runtime", "headroom", "manual", "unknown"],
-      "description": "usage 数据的来源；优先级 provider > litellm > runtime > headroom。"
+      "description": "Source of the usage data; priority provider > litellm > runtime > headroom."
     },
     "latency_ms": {
       "type": "integer",
@@ -98,37 +98,37 @@
       "type": "integer",
       "minimum": 100,
       "maximum": 599,
-      "description": "HTTP/provider 状态；>= 400 计为失败请求。"
+      "description": "HTTP/provider status; >= 400 counts as a failed request."
     },
     "step": {
       "type": "integer",
       "minimum": 1,
-      "description": "run 内 1-based 步号；一次性请求可省略。"
+      "description": "1-based step number within the run; may be omitted for one-shot requests."
     },
     "tool_names": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "本步模型调用的工具名。"
+      "description": "Tool names the model called at this step."
     },
     "write_paths": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "本步整文件写入的路径（edit 不算）。"
+      "description": "Paths written as whole files at this step (edit does not count)."
     },
     "rewrite_count": {
       "type": "integer",
       "minimum": 0,
-      "description": "本步对已写文件的重复整文件覆盖次数。"
+      "description": "Number of repeated whole-file overwrites of already-written files at this step."
     },
     "history_bytes": {
       "type": "integer",
       "minimum": 0,
-      "description": "投影前的序列化历史字节数。"
+      "description": "Serialized history size in bytes before projection."
     },
     "projected_bytes": {
       "type": "integer",
       "minimum": 0,
-      "description": "投影后实际发送的字节数。"
+      "description": "Bytes actually sent after projection."
     }
   },
   "allOf": [

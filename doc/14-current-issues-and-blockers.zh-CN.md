@@ -1,7 +1,9 @@
 # 14 当前问题与卡点（2026-11-06）
 
+> 语言：[English](14-current-issues-and-blockers.md) | **简体中文**
+
 > 本文只记录“现在还不能证明/还不能做”的事，避免把设计完成误当成验收完成。  
-> 相关路线：[08-设计路线-v0.2.md](08-设计路线-v0.2.md) §9。
+> 相关路线：[08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md) §9。
 
 ---
 
@@ -71,13 +73,13 @@
 6. **失败包与 verify 日志**：`load_failure_pack` 读取上一 run 的完整 `verify.log`，再由 Context Compiler 截断；超大日志先读入内存，长期应改为按需读取/预览。
 7. **路由字段未进事件 schema**：`TaskDispatched.data.route` 是自由 JSON；契约稳定前不要依赖字段名做外部工具。
 8. **升级历史依赖事件计数**：如果手工删改 `events.jsonl`，升级次数会失真；事件日志仍是唯一事实源。
-9. **并行已有锁与合并队列，缺真实数据**：路径锁、`[parallel]` 上限/预算、`loom merge` 合并队列、`loom board` 已实现，`scripts/smoke-parallel.sh` 实测 2 并发 10 任务无丢更新（见 [08](08-设计路线-v0.2.md) §9.5）；但 3 并行、cache hit 影响、真实仓库合并冲突率仍需真实 provider 与真实任务集，未验证前不要开 3 并行。
+9. **并行已有锁与合并队列，缺真实数据**：路径锁、`[parallel]` 上限/预算、`loom merge` 合并队列、`loom board` 已实现，`scripts/smoke-parallel.sh` 实测 2 并发 10 任务无丢更新（见 [08](08-design-roadmap-v0.2.zh-CN.md) §9.5）；但 3 并行、cache hit 影响、真实仓库合并冲突率仍需真实 provider 与真实任务集，未验证前不要开 3 并行。
 10. **价格表无版本校验**：`pricing_version` 可记录但未强制；价格变更后旧账本不会自动重算。
 11. **role→tier 是 opt-in**：未配置 `[routing.roles]` 时仍以 TaskSpec 的 `tier` 为准，不会自动套用文档矩阵；这是为了避免已有项目行为突变。
 12. **fallback 只看退出码**：判断依据是 `exit_code == 4 || timed_out`。退出码 4 目前靠 adapter 契约自觉（native 已把 provider 错误映射为 4）；如果某个 adapter 把 provider 错误报成 0，控制面不会切换，只会记成任务失败并可能误触发升级。
-13. ~~**`needs_input` / `blocked` 被 verify 记成失败**~~（2026-11-09 已修）：新增 `TaskStatus::NeedsInput` + `task.needs_input`，`verify` 在验收全过时保留 claim 状态，`blocked` / `budget_exceeded` 写 `task.blocked`，不再污染 M3 升级计数；见 [15](15-Agent运行时治理与工程化.md) §2.1。
-14. **人工事项没有常驻出口**：需要人回答的问题、审批、操作（装工具/给 key）、复核和提醒散落在对话历史、回执、日志里；用户离开当前会话后就很难知道“现在还有什么要我处理”。设计见 [15](15-Agent运行时治理与工程化.md) §2.2（attention inbox），当前未实现。
-15. **本地 CI 只停留在任务验收**：`loom init`/`doctor` 不生成仓库级检查，格式/lint/提交信息/review 仍要等服务器 CI；agent 也缺少统一的本地反馈命令。设计见 [15](15-Agent运行时治理与工程化.md) §4，当前未实现。
+13. ~~**`needs_input` / `blocked` 被 verify 记成失败**~~（2026-11-09 已修）：新增 `TaskStatus::NeedsInput` + `task.needs_input`，`verify` 在验收全过时保留 claim 状态，`blocked` / `budget_exceeded` 写 `task.blocked`，不再污染 M3 升级计数；见 [15](15-agent-runtime-governance-and-engineering.zh-CN.md) §2.1。
+14. **人工事项没有常驻出口**：需要人回答的问题、审批、操作（装工具/给 key）、复核和提醒散落在对话历史、回执、日志里；用户离开当前会话后就很难知道“现在还有什么要我处理”。设计见 [15](15-agent-runtime-governance-and-engineering.zh-CN.md) §2.2（attention inbox），当前未实现。
+15. **本地 CI 只停留在任务验收**：`loom init`/`doctor` 不生成仓库级检查，格式/lint/提交信息/review 仍要等服务器 CI；agent 也缺少统一的本地反馈命令。设计见 [15](15-agent-runtime-governance-and-engineering.zh-CN.md) §4，当前未实现。
 
 ---
 
@@ -133,7 +135,7 @@ make check
 2. 拿到 GPT + DeepSeek API key，先跑固定任务集的 native-only A/B，确认路由与成本口径。
 3. 再跑真实 goose/OpenCode canary，最后才宣称 M1/M2 退出标准完成。
 4. 2 并行已具备（锁 + 合并队列 + `scripts/smoke-parallel.sh` 实测）；3 并行仍需 A/B 证明 `WPT`/`CPVT` 不退化后再开。
-5. 先做 `doc/15` 里的 attention 正确性修复与 inbox（修 bug + 满足可见性），再做 CI 核心、question protocol；churn、CI hooks/review 与 skills 评估后置。分期与人日见 [16](16-运行时治理落地评估.md)。
+5. 先做 `doc/15` 里的 attention 正确性修复与 inbox（修 bug + 满足可见性），再做 CI 核心、question protocol；churn、CI hooks/review 与 skills 评估后置。分期与人日见 [16](16-runtime-governance-adoption-assessment.zh-CN.md)。
 
 同层 fallback 与 `loom route stats` 已完成，不再是待办。
 
@@ -141,13 +143,13 @@ make check
 
 ## 8. 2026-11-07 新发现（设计稿）
 
-以下四项已记录设计，但**未实现**，详见 [15-Agent运行时治理与工程化.md](15-Agent运行时治理与工程化.md)：
+以下四项已记录设计，但**未实现**，详见 [15-agent-runtime-governance-and-engineering.zh-CN.md](15-agent-runtime-governance-and-engineering.zh-CN.md)：
 
 1. **写入抖动**：步骤级投影 + patch-first/write 守卫 + 步骤级 token 归因已实现；仍未做的是 L1–L3 分级干预与成本感知重启（自动投影只按字节阈值触发，不按“第 N 次重写”触发）。
 2. **提问阻塞与人工事项可见性**：`needs_input` 不再被记成 `task.failed`；但外部 agent 仍可能挂起等 stdin，问题/审批/操作/复核仍缺少常驻 attention inbox。
 3. **skills 治理**：未验证 skill 不能全局安装；需要仓库画像、离线目录、按需加载、静态检查与评估后晋升；CI review/检查模板是其早期落点。
 4. **本地 CI 缺位**：`loom init` 只建骨架，不探测技术栈、不生成 acceptance/CI；格式、lint、review、提交信息等本可本地解决的检查仍依赖服务器，agent 也缺少统一的本地反馈回路。
-5. **落地评估已完成**：基于当前代码的接入点、契约变更、分期人日与风险见 [16-运行时治理落地评估.md](16-运行时治理落地评估.md)。其中确认了三处必须先修正的设计：CI 配置应命名为 `.loom.ci.toml`、放在目标项目根目录并纳入版本控制（它是项目策略，不是 `.loom/` 运行时状态）；本地 attestation 在 v1 不能授权服务器跳过 CI；`verify` 必须先停止覆盖 claim 回执，并停止把 `needs_input`/`blocked`/`budget_exceeded` 写成 `task.failed`。
+5. **落地评估已完成**：基于当前代码的接入点、契约变更、分期人日与风险见 [16-runtime-governance-adoption-assessment.zh-CN.md](16-runtime-governance-adoption-assessment.zh-CN.md)。其中确认了三处必须先修正的设计：CI 配置应命名为 `.loom.ci.toml`、放在目标项目根目录并纳入版本控制（它是项目策略，不是 `.loom/` 运行时状态）；本地 attestation 在 v1 不能授权服务器跳过 CI；`verify` 必须先停止覆盖 claim 回执，并停止把 `needs_input`/`blocked`/`budget_exceeded` 写成 `task.failed`。
 
 ## 9. 真实仓库首战（2026-11-08，tumblr-downloader / issue #24）
 
@@ -167,4 +169,4 @@ make check
 
 **环境（`dev.sh` 新增，均同路径挂载、rootless podman 无属主问题）**：`LOOM_TARGET_REPO` / `LOOM_ANDROID_SDK` / `LOOM_JAVA_HOME` / `LOOM_GRADLE_HOME` / `LOOM_MAVEN_HOME`（HOME 指向其父目录）；Robolectric 依赖用 `.loom/robolectric-init.gradle`（`maven.repo.local`）离线化，验收 A1 带 `--init-script`；JDK21+SDK34+Gradle 缓存全部复用宿主。
 
-**遗留**：`#25`（编辑队列）与 `#22`（profile 批量下载）是大功能，按当前配额余量不足以开工，待配额补充后再做；churn 投影（步骤级上下文重编译）已落地并用官方 deepseek 实测（完整历史 16–17KB 时单步 input 降 46%–55%，见 [16](16-运行时治理落地评估.md) §8.8），可作为开工后的成本基线。
+**遗留**：`#25`（编辑队列）与 `#22`（profile 批量下载）是大功能，按当前配额余量不足以开工，待配额补充后再做；churn 投影（步骤级上下文重编译）已落地并用官方 deepseek 实测（完整历史 16–17KB 时单步 input 降 46%–55%，见 [16](16-runtime-governance-adoption-assessment.zh-CN.md) §8.8），可作为开工后的成本基线。

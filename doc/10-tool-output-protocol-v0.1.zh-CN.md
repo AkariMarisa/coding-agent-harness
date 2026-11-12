@@ -1,5 +1,7 @@
 # 10 · 工具输出协议 v0.1
 
+> 语言：[English](10-tool-output-protocol-v0.1.md) | **简体中文**
+
 > 状态：**草案（2026-11-04）**，基于已确认的四项决策：  
 > 1. `items` 用短键，人类可读格式由工具代码转换，不占模型 token；  
 > 2. 三级预算先用 **8KB / 24KB / 128KB**，带 telemetry，边用边调；  
@@ -7,7 +9,7 @@
 > 4. `summary` 默认中文，可切英文/日文。  
 >
 > 配套 Schema：[`schemas/tool-result.v1.json`](../schemas/tool-result.v1.json)。  
-> 相关文档：[08-设计路线-v0.2.md](08-设计路线-v0.2.md) §6、[09-代码检索与知识库.md](09-代码检索与知识库.md) §8。
+> 相关文档：[08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md) §6、[09-code-search-and-knowledge-base.zh-CN.md](09-code-search-and-knowledge-base.zh-CN.md) §8。
 
 ---
 
