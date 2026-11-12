@@ -106,6 +106,8 @@ New behavior gets unit tests first; tests touching the filesystem/search use tem
 - Model names, ports, and CLI arguments in docs are **examples/placeholders**; verify against `--help` and official docs before relying on them.
 - **Admission test**: before adding a doc, ask "if this were deleted, would someone make a wrong decision or hit the same pitfall again within three months?" Write it only when the answer is yes.
 - **ADR for irreversible decisions**: record them in `doc/adr/` (Status / Context / Decision / Consequences / Alternatives, plus a mandatory **Model assumptions** section: which model capabilities the decision depends on, and what change triggers a re-review). An accepted ADR is never edited; supersede it with a new one.
+- **Status headers**: non-reference docs (direction records, proposals, evaluations) open with a status line right after the H1 — current state plus the date — and the line is updated when the state changes. A superseded record carries a pointer to its replacement; records are marked, never deleted on a timer.
+- **Spec freshness**: files under `.loom/specs/` carry `last_verified: YYYY-MM-DD`. `loom doctor` warns when it is missing or older than 90 days; time triggers a re-verification warning, never deletion.
 
 ### 8.1 Answers and Writing
 
