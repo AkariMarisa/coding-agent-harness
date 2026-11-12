@@ -35,7 +35,7 @@ pub use task::{
     TaskWorkspace, WorkspaceMode, TASK_VERSION,
 };
 pub use text::{estimate_tokens, parse_range, truncate_bytes, truncate_chars};
-pub use time::{compact_utc, rfc3339_ms};
+pub use time::{compact_utc, days_from_civil, epoch_days, rfc3339_ms};
 pub use usage::{
     aggregate_usage, CostSource, UsageAggregate, UsageFilter, UsageRecord, UsageSource,
     USAGE_VERSION,

@@ -6,9 +6,9 @@ use std::time::Instant;
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use loom_core::{
-    estimate_tokens, truncate_chars, Budget, BudgetLevel, Config, CostSource, Envelope, ErrorCode,
-    Limits, ModelCapability, Tier, ToolError, UsageAggregate, UsageFilter, UsageRecord,
-    UsageSource, Wire,
+    days_from_civil, epoch_days, estimate_tokens, truncate_chars, Budget, BudgetLevel, Config,
+    CostSource, Envelope, ErrorCode, Limits, ModelCapability, Tier, ToolError, UsageAggregate,
+    UsageFilter, UsageRecord, UsageSource, Wire,
 };
 use loom_store::{
     aggregate_usage, append_tool_event, append_usage, ledger_path, now_ms, read_usage, totals,
@@ -1372,6 +1372,76 @@ fn git_check_ignore(root: &Path, relative: &str) -> Option<bool> {
     }
 }
 
+/// Specs older than this many days without re-verification get a doctor
+/// warning. Time triggers the warning, never a deletion (AGENTS.md §8).
+const SPEC_STALE_DAYS: i64 = 90;
+
+/// Run directories larger than this get an archive hint. This is the layer
+/// where expiry is safe: facts live in `events.jsonl`, run dirs are evidence.
+const RUNS_ARCHIVE_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Parse `last_verified: YYYY-MM-DD` (colon or equals, quotes allowed) from a
+/// spec file. Returns `None` when the line is missing or the date is invalid.
+fn parse_last_verified(text: &str) -> Option<(i64, i64, i64)> {
+    let line = text.lines().find(|line| line.contains("last_verified"))?;
+    let raw = line.split("last_verified").nth(1)?;
+    let token = raw
+        .trim_start_matches(|c: char| c == ':' || c == '=' || c.is_whitespace())
+        .split_whitespace()
+        .next()?
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
+    let mut parts = token.split('-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = parts.next()?.parse().ok()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+/// Collect every `*.md` under `dir` recursively as absolute paths.
+fn collect_md(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_md(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            out.push(path);
+        }
+    }
+}
+
+/// Total bytes and top-level child count of a directory tree.
+fn dir_size(dir: &Path) -> (u64, usize) {
+    let mut bytes = 0_u64;
+    let mut children = 0_usize;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            children += 1;
+            bytes += dir_size(&path).0;
+        } else if let Ok(meta) = path.metadata() {
+            bytes += meta.len();
+        }
+    }
+    (bytes, children)
+}
+
+fn human_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{}KB", bytes / 1024)
+    }
+}
+
 fn doctor(project: &Project) -> Result<i32> {
     let mut healthy = true;
     let mut check = |name: &str, pass: bool, detail: &str| {
@@ -1480,6 +1550,97 @@ fn doctor(project: &Project) -> Result<i32> {
             }
         }
 
+        // Spec freshness: `last_verified` older than the threshold (or absent)
+        // gets a re-verification warning. Time prompts review, never deletion.
+        let specs_dir = loom.join("specs");
+        let mut spec_files = Vec::new();
+        if specs_dir.is_dir() {
+            collect_md(&specs_dir, &mut spec_files);
+        }
+        if !spec_files.is_empty() {
+            let stale_days = SPEC_STALE_DAYS;
+            let cutoff = epoch_days(now_ms()) - stale_days;
+            let mut stale = Vec::new();
+            let mut undated = Vec::new();
+            for file in &spec_files {
+                let name = file
+                    .strip_prefix(&specs_dir)
+                    .unwrap_or(file)
+                    .display()
+                    .to_string();
+                let text = fs::read_to_string(file).unwrap_or_default();
+                match parse_last_verified(&text) {
+                    Some((y, m, d)) => {
+                        if days_from_civil(y, m, d) < cutoff {
+                            stale.push(format!("{name} ({y:04}-{m:02}-{d:02})"));
+                        }
+                    }
+                    None => undated.push(name),
+                }
+            }
+            let tail = |items: &[String]| {
+                let shown: Vec<&str> = items.iter().take(5).map(String::as_str).collect();
+                if items.len() > 5 {
+                    format!("{}, (+{} more)", shown.join(", "), items.len() - 5)
+                } else {
+                    shown.join(", ")
+                }
+            };
+            if stale.is_empty() && undated.is_empty() {
+                check(
+                    "specs",
+                    true,
+                    &format!(
+                        "{} file(s), all last_verified within {stale_days}d",
+                        spec_files.len()
+                    ),
+                );
+            }
+            if !stale.is_empty() {
+                warn(
+                    "specs",
+                    &format!(
+                        "{} stale >{stale_days}d, re-verify or deprecate: {}",
+                        stale.len(),
+                        tail(&stale)
+                    ),
+                );
+            }
+            if !undated.is_empty() {
+                warn(
+                    "specs",
+                    &format!(
+                        "{} missing/bad last_verified: {}",
+                        undated.len(),
+                        tail(&undated)
+                    ),
+                );
+            }
+        }
+
+        // Run-log retention: the layer where expiry is safe. Facts stay in
+        // events.jsonl; run dirs are diagnostic evidence.
+        let runs_dir = loom.join("runs");
+        if runs_dir.is_dir() {
+            let (bytes, runs) = dir_size(&runs_dir);
+            let threshold_mb = RUNS_ARCHIVE_BYTES / (1024 * 1024);
+            if bytes > RUNS_ARCHIVE_BYTES {
+                warn(
+                    "runs-archive",
+                    &format!(
+                        "{} in {runs} run dir(s) (threshold {threshold_mb}MB); prune old run logs/receipts once the evidence is no longer needed — events.jsonl keeps the status history",
+                        human_bytes(bytes)
+                    ),
+                );
+            } else if runs > 0 {
+                check(
+                    "runs-archive",
+                    true,
+                    &format!("{} in {runs} run dir(s)", human_bytes(bytes)),
+                );
+            }
+        }
+
         // `doc/03` §13: leftover locks are cleaned here; a lock whose lease
         // expired while the owner is still alive needs a human.
         match loom_store::reclaim_stale_locks(project) {
@@ -1549,4 +1710,52 @@ fn count_entries(path: &std::path::Path, dirs_only: bool) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod staleness_tests {
+    use super::*;
+
+    #[test]
+    fn parses_last_verified_dates() {
+        assert_eq!(
+            parse_last_verified("last_verified: 2026-11-12"),
+            Some((2026, 11, 12))
+        );
+        assert_eq!(
+            parse_last_verified("last_verified:2026-11-12"),
+            Some((2026, 11, 12))
+        );
+        assert_eq!(
+            parse_last_verified("<!-- last_verified = \"2026-01-02\" -->"),
+            Some((2026, 1, 2))
+        );
+        assert!(parse_last_verified("no date here").is_none());
+        assert!(parse_last_verified("last_verified: soon").is_none());
+        assert!(
+            parse_last_verified("last_verified: 2026-13-01").is_none(),
+            "month 13"
+        );
+        assert!(
+            parse_last_verified("last_verified: 2026-11-32").is_none(),
+            "day 32"
+        );
+    }
+
+    #[test]
+    fn dir_size_walks_nested_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("a.log"), vec![b'x'; 100]).expect("write");
+        fs::create_dir(dir.path().join("R-1")).expect("mkdir");
+        fs::write(dir.path().join("R-1").join("b.log"), vec![b'y'; 50]).expect("write");
+        let (bytes, children) = dir_size(dir.path());
+        assert_eq!(bytes, 150);
+        assert_eq!(children, 1);
+    }
+
+    #[test]
+    fn human_size_units() {
+        assert_eq!(human_bytes(2048), "2KB");
+        assert_eq!(human_bytes(5 * 1024 * 1024), "5.0MB");
+    }
 }
