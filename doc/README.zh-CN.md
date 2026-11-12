@@ -66,6 +66,7 @@
 | [16-runtime-governance-adoption-assessment.zh-CN.md](16-runtime-governance-adoption-assessment.zh-CN.md) | **评估稿（未改代码）**：基于现有代码的接入点、契约变更、分期、人日与风险；含 `.loom.ci.toml` 归属、目标项目 vs dogfood、attestation、verify 语义修正 | 项目负责人/实现者 |
 | [17-workspace-dev-environment-isolation.zh-CN.md](17-workspace-dev-environment-isolation.zh-CN.md) | **方向记录（未设计）**：三平台按工作区隔离环境、A+B 无虚拟化、复用既有声明文件、容器降级为可选 profile；不做通用环境管理器 | 项目负责人/实现者 |
 | [18-agent-collaboration-workflow-proposal.zh-CN.md](18-agent-collaboration-workflow-proposal.zh-CN.md) | **方法提案（未实施）**：六十年流程史的存活原则、失效仪式清单、方向/批次/工作项三层节奏、人的四个介入点、新人六命令上手路径；配套 `loom plan` | 项目负责人/新人 |
+| [adr/README.zh-CN.md](adr/README.zh-CN.md) | **ADR 索引**：不可逆决策记录，含模型能力假设字段；格式、编号与 Supersede 规则 | 架构师/实现者 |
 | [`.opencode/skill-pilot/README.zh-CN.md`](../.opencode/skill-pilot/README.zh-CN.md) | **Skill 试点**：项目级 skill 清单、触发范围、固定 token 成本、来源与许可 | 实现者/维护者 |
 
 **推荐阅读顺序**：README → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10。11/12 是后续调研，可最后读；13 是多仓库工作区设计稿，做多端协同时再读；15 是运行时治理设计稿，16 是其落地评估，处理 agent 行为/工程化时按 15 → 16 阅读；如果只看一篇：**08**。
