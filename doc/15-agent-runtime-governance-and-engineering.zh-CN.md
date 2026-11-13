@@ -3,14 +3,14 @@
 > 语言：[English](15-agent-runtime-governance-and-engineering.md) | **简体中文**
 
 > 状态：**设计稿，未实现**（2026-11-07）。
-> 范围：四个已观察问题——写入抖动、提问阻塞与人工事项可见性、skills 治理、agent/harness 驱动的本地 CI。
+> 范围：五个已观察问题——写入抖动、提问阻塞与人工事项可见性、skills 治理、agent/harness 驱动的本地 CI、重复查询（reread）。
 > 前置阅读：[08-design-roadmap-v0.2.zh-CN.md](08-design-roadmap-v0.2.zh-CN.md)（状态所有权 / adapter 契约）、[03-core-protocols.zh-CN.md](03-core-protocols.zh-CN.md)（TaskSpec / 回执 / 事件）、[10-tool-output-protocol-v0.1.zh-CN.md](10-tool-output-protocol-v0.1.zh-CN.md)（工具与 telemetry）、[14-current-issues-and-blockers.zh-CN.md](14-current-issues-and-blockers.zh-CN.md)（当前环境限制）。
 
 ---
 
 ## 0. 结论
 
-这四个问题都不是“换更强的模型”能根治的，而是控制面缺少**行为协议**：
+这五个问题都不是“换更强的模型”能根治的，而是控制面缺少**行为协议**：
 
 | 问题 | 本质 | 控制面要补的东西 |
 |---|---|---|
@@ -18,6 +18,7 @@
 | 提问即暂停 | 提问被当成失败或交互等待，而不是一次可恢复的返回；真正需要人做的事项又淹没在后续对话里 | `questions.json` + `needs_input` 状态 + 回答/假设协议 + 常驻 attention inbox |
 | skills 泛滥 | skill 是上下文成本与供应链风险，不是“装了就有用” | 仓库画像、离线目录、按需加载、验证后晋升 |
 | 本地 CI 缺位 | 本地 CI 不是验收的附属品；它是 agent 和人都能调用的仓库级检查与提交前闸门 | 技术栈探测、`.loom.ci.toml`、`loom ci`、hooks、review/attestation、skills 化检查 |
+| 重复查询（reread） | 模型几步前查过的事实又查一遍；投影裁掉旧工具结果，既无 run 内去重也无重复度量 | run 内工具去重（bash/search 的 `unchanged`）、投影裁剪时留一行摘要、`tools.jsonl` + 重复调用指标 |
 
 共同主线：**把 agent 的行为变成可观测、可中断、可恢复的结构化产物**；不引入长会话、不依赖交互式等待、不让 LLM 做本可确定性判断的事。
 
@@ -1216,3 +1217,35 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 ## 10. 落地评估
 
 基于当前代码的接入点、契约变更、分期人日与风险，以及三处需要先修正的设计（`.loom.ci.toml` 位置与归属、attestation 授权、`verify` 的 claim/`needs_input` 语义），见 [16-runtime-governance-adoption-assessment.zh-CN.md](16-runtime-governance-adoption-assessment.zh-CN.md)。
+
+---
+
+## 11. 问题五：重复查询（reread）
+
+> 状态：**方向记录，未实施**（2026-11-13）。追加在落地评估之后，避免重编号被其他文档引用的章节。
+
+agent 会重查几步前已经查到的事实——第 3 步答过的 `node --version`，第 8 步又问一遍。这在 [01-problems-and-requirements.zh-CN.md](01-problems-and-requirements.zh-CN.md) 里早已登记为 **P3 重复读取（R7 / FR-05/13，S/P4）**，历史实测 `reread` 累计 **5,670,755** tokens。
+
+### 11.1 三个成因
+
+1. **投影裁剪（设计使然）**：步骤级投影只对近期 turn 逐字保留，旧 payload 被裁掉——事实从模型视野里物理消失，重查成了唯一选项。
+2. **注意力衰减**：即使没被裁，早期结果在长上下文里也会稀释。
+3. **重查有时是对的**：事实可能是可变的（run 中途装 node 会改变版本号）。任何“记住它”的设计都必须区分不可变与可变事实——盲目缓存会把重复查询升级成更糟的错误：拿着旧值干活，还以为验证过。
+
+### 11.2 现状盘点：治理只做了一半
+
+| 部件 | 状态 |
+|---|---|
+| `read` 工具的 `unchanged`（同 run 同内容 → 短回包） | 已实现（`loom-tools/src/read.rs`） |
+| `bash`/`search` 同参数去重——版本探测正是 `bash` | 缺失，每次全量返回 |
+| 投影裁剪工具结果时留一行摘要 | 缺失，裁了就全丢 |
+| 重复调用度量 | **盲区**：native 不落 `tools.jsonl`（`AGENTS.md` §5 要求），usage 行只有 `tool_names` 没有 args，同-`(tool,args)` 重复数不出来 |
+
+### 11.3 方案，按序
+
+1. **先度量**：native 落 `tools.jsonl`（顺带还 §5 的债），churn 加 `repeated_calls` 指标——run 内同-`(tool,args)` 次数与重复花掉的 token。没有数据就不做投资决策。
+2. **工具层——让重查变便宜，而不是禁止重查**：给 `bash`/`search` 上 `read` 已验证的模式（`unchanged: true, checked at step N`）。失效规则：任何未命中缓存的 bash 执行清空 bash 缓存（它可能改了环境），写入与变更性 bash 清 read/search 缓存（`write_log` 已有）；作用域是 run。
+3. **上下文层——裁剪留摘要**：投影丢掉工具结果时留一行（`tool: args → key result (step N)`），而不是全丢。
+4. **约定层最后**：没有①②兜底就上“别重查”的 prompt 规则，会把重查变成凭记忆回忆，而编造的旧值比重复查询更贵。STATE.md/scratchpad 只是备选，等数据证明①②不够才考虑。
+
+目标不是零重查——**不可变事实免重查、可变事实重查免重罚**。

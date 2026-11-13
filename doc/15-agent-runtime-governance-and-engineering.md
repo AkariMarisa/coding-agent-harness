@@ -3,14 +3,14 @@
 > Language: **English** | [简体中文](15-agent-runtime-governance-and-engineering.zh-CN.md)
 
 > Status: **Design draft, not implemented** (2026-11-07).
-> Scope: four observed problems — write churn, question blocking and visibility of human items, skills governance, agent/harness-driven local CI.
+> Scope: five observed problems — write churn, question blocking and visibility of human items, skills governance, agent/harness-driven local CI, repeated queries (reread).
 > Prerequisite reading: [08-design-roadmap-v0.2.md](08-design-roadmap-v0.2.md) (state ownership / adapter contract), [03-core-protocols.md](03-core-protocols.md) (TaskSpec / receipt / events), [10-tool-output-protocol-v0.1.md](10-tool-output-protocol-v0.1.md) (tools and telemetry), [14-current-issues-and-blockers.md](14-current-issues-and-blockers.md) (current environment blockers).
 
 ---
 
 ## 0. Conclusion
 
-None of these four problems can be rooted out by "switching to a stronger model"; what the control plane lacks is a **behavior protocol**:
+None of these five problems can be rooted out by "switching to a stronger model"; what the control plane lacks is a **behavior protocol**:
 
 | Problem | Essence | What the control plane must add |
 |---|---|---|
@@ -18,6 +18,7 @@ None of these four problems can be rooted out by "switching to a stronger model"
 | A question pauses the session | A question is treated as a failure or an interactive wait rather than a recoverable return; the items that genuinely need a human are then drowned in later conversation | `questions.json` + `needs_input` state + answer/assumption protocol + a resident attention inbox |
 | skills proliferation | A skill is a context cost and a supply-chain risk, not "install it and it helps" | repo profile, offline catalog, on-demand loading, promotion after validation |
 | absence of local CI | Local CI is not an accessory to acceptance; it is a repo-level check surface and pre-commit gate that both agents and humans can invoke | stack detection, `.loom.ci.toml`, `loom ci`, hooks, review/attestation, skill-based checks |
+| Repeated queries (reread) | The model re-asks for facts obtained a few steps earlier; projection evicts old tool results, and there is neither per-run dedup nor a repeat metric | per-run tool dedup (`unchanged` for bash/search), one-line digests on projection eviction, `tools.jsonl` + a repeated-call metric |
 
 Common thread: **turn agent behavior into structured artifacts that are observable, interruptible, and recoverable**; no long sessions, no interactive waits, no asking an LLM to make judgments that are deterministic.
 
@@ -1216,3 +1217,35 @@ Notes:
 ## 10. Adoption assessment
 
 For the integration points in the current code, contract changes, phased person-days and risks, plus the three designs that must be corrected first (`.loom.ci.toml` placement and ownership, attestation authorization, `verify`'s claim/`needs_input` semantics), see [16-runtime-governance-adoption-assessment.md](16-runtime-governance-adoption-assessment.md).
+
+---
+
+## 11. Problem five: repeated queries (reread)
+
+> Status: **direction record, not implemented** (2026-11-13). Appended after the adoption assessment to avoid renumbering sections that other docs reference.
+
+The agent re-queries facts it already obtained a few steps earlier — `node --version` answered at step 3 is asked again at step 8. This was registered before as **P3 repeated reads (R7 / FR-05/13, S/P4)** in [01-problems-and-requirements.md](01-problems-and-requirements.md), with a measured historical `reread` volume of **5,670,755** tokens.
+
+### 11.1 Three causes
+
+1. **Projection eviction (designed-in)**: step-level projection keeps recent turns verbatim and projects older payloads away, so the fact is physically gone from the model's view; re-querying is then the only option.
+2. **Attention decay**: even unprojected early results dilute in a long context.
+3. **Re-querying is sometimes correct**: the fact may be volatile (installing node mid-run changes the version). Any "remember it" design must separate immutable from volatile facts — blind caching upgrades a repeated query into a worse error: acting on a stale value while believing it was verified.
+
+### 11.2 Inventory: governance is half done
+
+| Part | Status |
+|---|---|
+| `read` tool `unchanged` (same content in a run → short envelope) | implemented (`loom-tools/src/read.rs`) |
+| `bash` / `search` same-argument dedup — version probes are `bash` | missing; full payload every time |
+| one-line digest when projection evicts a tool result | missing; eviction drops everything |
+| repeated-call measurement | **blind spot**: native does not write `tools.jsonl` (required by `AGENTS.md` §5), usage rows carry `tool_names` without args, so same-`(tool,args)` repeats cannot be counted |
+
+### 11.3 Plan, in order
+
+1. **Measure first**: native writes `tools.jsonl` (also settling the §5 debt) and churn gains a `repeated_calls` metric — per-run same-`(tool,args)` count plus the tokens spent repeating. No data, no investment decision.
+2. **Tool layer — make re-queries cheap, not forbidden**: give `bash`/`search` the pattern `read` already proves (`unchanged: true, checked at step N`). Invalidation: any cache-miss bash execution clears the bash cache (it may have changed the environment), writes and mutating bash clear the read/search cache (`write_log` exists); scope is the run.
+3. **Context layer — digest on eviction**: when projection drops a tool result, keep one line (`tool: args → key result (step N)`) instead of nothing.
+4. **Convention layer last**: a "don't re-query" prompt rule without layers 1–2 turns re-querying into recalling from memory, and a fabricated stale value costs more than a repeat. STATE.md/scratchpad stays a fallback, adopted only if data shows layers 1–2 are insufficient.
+
+Target: not zero re-queries — **immutable facts without re-queries, volatile facts with cheap re-queries**.
