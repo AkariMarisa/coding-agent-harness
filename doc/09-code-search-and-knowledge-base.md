@@ -110,6 +110,16 @@ Rules:
 
 **R2 in v1 contains no embedding**: BM25 + exact identifier matching + tag/time filtering already covers queries like "which task touched here last time" and "why was this decision made", with zero models and zero GPUs.
 
+### 6.1 Retrieval does not cure re-queries (memory / RAG boundary)
+
+A re-query inside a run is a **retention** problem — the fact was in context and got evicted — while RAG addresses **retrieval**. Swapping `bash node --version` for `memory.search("node version")` keeps the query and adds a retrieval payload on top. The economics only hold when **injected tokens < recomputed tokens**: true for large semantic sources (a 20 KB file vs a 500-token snippet), never for small deterministic facts (versions, config, git state), where recomputing ~20 tokens beats injecting k chunks of ~150 tokens that then stay in history until projected. The cost-shifting accounting is already in §2.
+
+Durable cross-run facts have a better medium here: **files are the memory** — contract layer, ADRs, failure packs. They are reviewable and diffable, freshness-pinned (`sha256`, `last_verified`), explicitly superseded, and doctor-checkable; vector memory offers none of those. A stale memory entry is a correctness bug (acting on an old version while believing it verified), pollution re-injected with false authority, and a new source of nondeterminism in a control plane whose value is replayability.
+
+RAG's real turf: cross-run failure history ("how did we solve this error before"), thousand-scale heterogeneous documents, logs. At current scale R0–R2 cover it. **Trigger**: only when cross-run semantic lookups become frequent *and* R0–R2 measurably fail under the §12 A/B method should the embedding plugin deferred in §5 be reconsidered.
+
+The split, one line each: cheap deterministic recomputation → tool-layer cache (see `doc/15` §11); large semantic sources → retrieval, R2 before embeddings; facts humans and agents must both trust → files; within-session retention → projection digests.
+
 ---
 
 ## 7. "Addresses, not content": the retrieval result protocol
