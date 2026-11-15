@@ -1249,3 +1249,61 @@ The agent re-queries facts it already obtained a few steps earlier — `node --v
 4. **Convention layer last**: a "don't re-query" prompt rule without layers 1–2 turns re-querying into recalling from memory, and a fabricated stale value costs more than a repeat. STATE.md/scratchpad stays a fallback, adopted only if data shows layers 1–2 are insufficient.
 
 Target: not zero re-queries — **immutable facts without re-queries, volatile facts with cheap re-queries**.
+
+---
+
+## 12. Observability and declarative dispatch (notes from other tools)
+
+> Status: **direction record, not implemented** (2026-11-15). Recorded from using other tools (OpenCode, Codex CLI): four experiences mapped onto Loom's architecture. Nothing here is scheduled; it feeds §3 (skills) and the pending questions protocol.
+
+### 12.1 User-visible sub-agent progress
+
+The requirement is user-facing: a person must see *what each sub-agent is doing and how far along it is*, not just "N running". Most tools show only the latter. In practice this is usually a display gap, not a data gap — OpenCode's `session_v2` already stores model, tokens, `time_busy` and last activity, and Loom's usage rows already carry per-step `latency_ms`, tokens and step numbers.
+
+A user-facing progress line should be derived from existing state, with at most one new marker:
+
+| Display | Source |
+|---|---|
+| current action | step phase + tool names — needs a `step.started` marker at step top, otherwise the view lags one step |
+| how far along | `step / max_steps`, `tokens / budget` — budget-relative progress, never an invented "percent complete" |
+| elapsed | now − step start / run start |
+| response latency | previous step `latency_ms` (already recorded) plus cumulative average |
+| outcome surface | acceptance passed / remaining (available at run end) |
+
+Loom landing: a `loom top` (or `loom watch`) command that tails `usage.jsonl` + `run.json` + locks, runnable in a second terminal while `dispatch` blocks; optionally the `step.started` marker above. Boundary: sessions inside opencode/goose adapters are invisible **by contract** (process + files + exit code); surfacing them belongs to adapter presets, not the core.
+
+The harness-independent pattern: a sub-agent publishes a lightweight progress record (current action, step, started_at) and the parent aggregates it. That is the shape a sub-agent panel takes regardless of which harness runs it.
+
+### 12.2 Queue, steer, rebuild: three ways to handle an in-flight context
+
+| Intent and timing | Codex / OpenCode | Loom |
+|---|---|---|
+| supplement, for the **next** unit | queue — delivered after the current task finishes | the task queue itself (ready list / `depends_on`); the granularity is already tasks, not messages |
+| supplement or redirect **inside the current unit** | steer — injected into the active turn | `needs_input` → answer → rebuild the packet |
+| ask without leaving a trace | `/btw` | not needed; Loom has no free-form session |
+
+**Does rebuild waste tokens?** It costs `sunk(run1) + fresh packet − prefix cache − reused state`, with three relief valves:
+
+1. **Stable-prefix cache**: goal/constraints/system do not change across runs. The two re-dispatches of one task in my-pal (2026-11-10) cached **84% and 86%** of their input (47,872/56,811 and 29,440/34,360) — rebuilding the conversation is much cheaper than it sounds.
+2. **The work is not rebuilt**: the worktree and its commits are reused across attempts, the failure pack carries the previous run's evidence forward, acceptance results persist. Only the model's conversation is rebuilt.
+3. **Sunk cost tracks when the question is asked**: a question at step 1–2 costs roughly one cached first packet; the same question at step 10 costs the whole spent run.
+
+Design rule: **treat question timing as a cost parameter**. Worker prompts should say "stop immediately when information is missing; do not proceed on assumptions" — the current "stop when you cannot proceed" does not cover missing information, so the model tends to guess instead of asking. This is the cost argument for the handoff contract: sending everything once is what makes rebuilds rare.
+
+Honest tradeoffs: steer is the cheapest in tokens but risks intent drift (and may discard an in-flight generation); queue wastes nothing in flight but arrives too late to correct work in progress — it prepares the next round instead; rebuild is the most expensive path with the cleanest intent. Loom chose rebuild because rebuilding is cheap here, not because it is free. The ergonomic path — `questions.json` plus answer injection — remains on the pending list; this section argues for prioritizing it after the judgment gate.
+
+### 12.3 Skills: dispatch by declaration, not by discovery
+
+Loom already ships the correct precedent: `default_prompt_role` maps `TaskSpec.role` to a prompt deterministically in code. A sub-agent that silently misses its skill (observed on Codex CLI) is what happens when instruction dispatch is left to model discovery.
+
+Proposal for §3: **`TaskSpec.skills: [id]`** — the context compiler injects skill bodies into the packet like `inputs`, with a budget cap; references are read on demand by path, the same body-plus-sample shape OpenCode uses. The model does not discover the skill — it is in the packet.
+
+- Verification: the receipt records which skill ids were injected — mechanically checkable. Do not try to verify "the model used it".
+- One field, two consumers: native injects the body; the opencode preset appends `@skill-id` mentions, which is OpenCode's explicit load entrypoint.
+
+Unstable triggers — they differ per person and per language — have one root: dispatch by model judgment over description text. Rules when Loom grows skills:
+
+1. **Loading is declaration**: the TaskSpec/packet decides, chosen by the human at slicing time (see [18-agent-collaboration-workflow-proposal.md](18-agent-collaboration-workflow-proposal.md): the human is the decider); zero model judgment.
+2. Description-based discovery stays a convenience layer for the main session; an explicit id (`@skill-id`, a command) is the deterministic floor.
+3. Match by id, never by description text — ids are path-derived, case-sensitive and language-neutral, which removes the "differs per language" class outright.
+4. The skill-pilot inventory's trigger-scope column is already a human-written declaration and can feed `TaskSpec.skills`; promotion after validation (§3) keeps tested skills only.

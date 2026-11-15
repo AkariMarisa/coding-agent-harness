@@ -1249,3 +1249,61 @@ agent 会重查几步前已经查到的事实——第 3 步答过的 `node --ve
 4. **约定层最后**：没有①②兜底就上“别重查”的 prompt 规则，会把重查变成凭记忆回忆，而编造的旧值比重复查询更贵。STATE.md/scratchpad 只是备选，等数据证明①②不够才考虑。
 
 目标不是零重查——**不可变事实免重查、可变事实重查免重罚**。
+
+---
+
+## 12. 观测与声明式分派（来自其他工具的笔记）
+
+> 状态：**方向记录，未实施**（2026-11-15）。来自使用其他工具（OpenCode、Codex CLI）的四条体验，映射到 Loom 的架构上。本节不排期；它喂给 §3（skills）与待实现的问答协议。
+
+### 12.1 用户可见的子代理进度
+
+需求是面向用户的：人要看到**每个子代理在干什么、干到哪了**，而不只是“N 个在跑”。多数工具只给后者。实践中这通常是展示缺口而不是数据缺口——OpenCode 的 `session_v2` 本来就存着模型、token、`time_busy` 和最后活动时间，Loom 的 usage 行本来就有每步 `latency_ms`、token 和步号。
+
+面向用户的进度行应当从既有状态派生，最多补一个标记：
+
+| 展示项 | 来源 |
+|---|---|
+| 在干什么 | 步的 phase + 工具名——需要步首 `step.started` 标记，否则视图滞后一步 |
+| 干到哪了 | `step / max_steps`、`tokens / budget`——预算相对进度，绝不编造“完成度百分比” |
+| 跑了多久 | now − 步开始时间 / run 起始 |
+| 响应多快 | 上一步 `latency_ms`（已记录）+ 累计平均 |
+| 结果面 | acceptance 已过 / 未跑（run 收尾时可得） |
+
+Loom 落点：`loom top`（或 `loom watch`）命令，tail `usage.jsonl` + `run.json` + 锁表，在 `dispatch` 阻塞时用第二个终端跑；可选加上面的 `step.started` 标记。边界：opencode/goose adapter 内部的会话**按契约不可见**（进程 + 文件 + exit code）；要暴露它们属于 adapter preset，不属于 core。
+
+与 harness 无关的通用形态：子代理发布一条轻量进度记录（当前动作、步号、started_at），父面板聚合。无论底层是哪个 harness，子代理面板都是这个形状。
+
+### 12.2 queue、steer、rebuild：处置在飞上下文的三种方式
+
+| 意图与时机 | Codex / OpenCode | Loom |
+|---|---|---|
+| 补充，给**下一个单元**用 | queue——当前任务完成后才投递 | 任务队列本身就是（ready list / `depends_on`）；粒度已经是任务而不是消息 |
+| 补充或改向，**当前单元内** | steer——注入当前轮 | `needs_input` → 回答 → 重建 packet |
+| 问一句、不留痕 | `/btw` | 不需要；Loom 没有自由会话 |
+
+**重建会不会浪费 token？** 成本是 `sunk(run1) + 新 packet − 前缀缓存 − 复用的状态`，有三个减压阀：
+
+1. **稳定前缀缓存**：goal/constraints/system 跨 run 不变。my-pal（2026-11-10）里同一任务的两次重派发，input 缓存命中 **84% 与 86%**（47,872/56,811 和 29,440/34,360）——重建对话比听起来便宜得多。
+2. **工作不重建**：worktree 及其提交跨 attempt 复用，failure pack 把上一 run 的证据带过去，acceptance 结果依然有效。被重建的只有模型的对话。
+3. **沉没成本正比于提问时机**：第1–2步提问约等于一个缓存价的首包；同一个问题拖到第10步，沉没的就是整段已花的 run。
+
+设计规则：**把提问时机当成成本参数**。worker prompt 应当写“发现缺信息立即停，不要带着假设往下走”——现有的“无法推进就停”不覆盖缺信息的情形，模型会猜着走。这就是 handoff 契约的成本论证：一次发全，重建才会罕见。
+
+诚实的取舍：steer token 上最省但意图易漂（还可能作废在飞的生成）；queue 在飞零浪费但到达太晚，纠正不了进行中的工作——它只是为下一轮备料；rebuild 是最贵的路径、意图最干净。Loom 选 rebuild 是因为这里重建便宜，不是因为它免费。让这条路好走的 `questions.json` + 回答注入仍在待实现清单；本节主张在 judgment gate 之后优先做它。
+
+### 12.3 skill：按声明分派，不按发现分派
+
+Loom 已经有正确样本：`default_prompt_role` 在代码里按 `TaskSpec.role` 确定性地映射 prompt。子代理悄悄没拿到 skill（在 Codex CLI 上观察到）正是把指令分派交给模型发现时会发生的事。
+
+给 §3 的提案：**`TaskSpec.skills: [id]`**——context compiler 像注入 inputs 一样把 skill 正文编进 packet，设预算上限；references 按路径按需读，与 OpenCode“正文 + 采样”同形。模型不需要发现它——它就在 packet 里。
+
+- 验证面：回执记录注入了哪些 skill id——机械可查。不要试图验证“模型用了它”。
+- 一个字段两处用：native 注入正文；opencode preset 拼 `@skill-id` 提及，那是 OpenCode 的显式加载入口。
+
+触发不稳定——因人、因语言都不同——根源只有一个：按 description 文本的模型判断做分派。Loom 长出 skill 时的规则：
+
+1. **加载即声明**：由 TaskSpec/packet 决定，人在切片时选（见 [18-agent-collaboration-workflow-proposal.zh-CN.md](18-agent-collaboration-workflow-proposal.zh-CN.md)：人是决策者）；零模型判断。
+2. 基于 description 的发现只作为主会话的便利层；显式 id（`@skill-id`、命令）是确定性地板。
+3. 按 id 匹配，绝不按 description 文本——id 由路径派生、大小写精确、语言中立，直接消灭“因语言漂移”这一类。
+4. skill-pilot 清单的触发范围列本来就是人写的声明，可作为 `TaskSpec.skills` 的来源；晋升前验证（§3）保证进清单的 skill 有测试。
