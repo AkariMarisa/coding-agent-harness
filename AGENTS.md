@@ -152,7 +152,7 @@ Current blockers are tracked in `doc/14-current-issues-and-blockers.md`.
 **Designed but not implemented**:
 
 - Multi-repo workspace / multi-client collaboration (manifest member repos, `loom workspace *`, cross-member same-name-branch worktrees), see `doc/13-multi-repo-workspace-and-multi-client.md` (M5, P0–P3).
-- Runtime governance and engineering (implemented: step-level context projection `loom-native/src/project.rs` + `scripts/smoke-churn.sh`, patch-first/write guards, step-level token attribution + `logs/churn.json` + `loom churn stats`; still pending — L1–L3 graded intervention, `questions.json` + attention inbox, skills scan/on-demand load/verified promotion, agent/harness-driven local CI and hooks/review/attestation — see `doc/15-agent-runtime-governance-and-engineering.md`).
+- Runtime governance and engineering (implemented: step-level context projection `loom-native/src/project.rs` + `scripts/smoke-churn.sh`, patch-first/write guards, step-level token attribution + `logs/churn.json` + `loom churn stats`; still pending — L1–L3 graded intervention, `questions.json` + attention inbox, skills scan/on-demand load/verified promotion, user-visible sub-agent progress (`loom top`), declarative skill dispatch (`TaskSpec.skills`), agent/harness-driven local CI and hooks/review/attestation — see `doc/15-agent-runtime-governance-and-engineering.md`).
 
 **Directions and proposals (not implemented)**:
 

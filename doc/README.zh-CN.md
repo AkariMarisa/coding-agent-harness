@@ -62,7 +62,7 @@
 | [12-external-practices-comparison-and-adoption.zh-CN.md](12-external-practices-comparison-and-adoption.zh-CN.md) | **对照笔记**：外部 harness/多模型/订阅实践，采纳并发、能力位、混合 lane、观测口径 | 架构/实现者 |
 | [13-multi-repo-workspace-and-multi-client.zh-CN.md](13-multi-repo-workspace-and-multi-client.zh-CN.md) | **设计稿（未实现）**：monorepo 对照、meta 控制面、manifest 成员仓库、同名分支聚合 worktree、跨端任务拆分 | 架构/实现者 |
 | [14-current-issues-and-blockers.zh-CN.md](14-current-issues-and-blockers.zh-CN.md) | **状态记录**：环境卡点、M2/M3 未闭环项、技术债与下一步 | 项目负责人/实现者 |
-| [15-agent-runtime-governance-and-engineering.zh-CN.md](15-agent-runtime-governance-and-engineering.zh-CN.md) | **设计稿（未实现）**：写入抖动（churn）、提问阻塞与 attention inbox、skills 治理、agent/harness 驱动的本地 CI | 架构/实现者 |
+| [15-agent-runtime-governance-and-engineering.zh-CN.md](15-agent-runtime-governance-and-engineering.zh-CN.md) | **设计稿（未实现）**：写入抖动（churn）、提问阻塞与 attention inbox、skills 治理、agent/harness 驱动的本地 CI、子代理进度观测、声明式 skill 分派 | 架构/实现者 |
 | [16-runtime-governance-adoption-assessment.zh-CN.md](16-runtime-governance-adoption-assessment.zh-CN.md) | **评估稿（未改代码）**：基于现有代码的接入点、契约变更、分期、人日与风险；含 `.loom.ci.toml` 归属、目标项目 vs dogfood、attestation、verify 语义修正 | 项目负责人/实现者 |
 | [17-workspace-dev-environment-isolation.zh-CN.md](17-workspace-dev-environment-isolation.zh-CN.md) | **方向记录（未设计）**：三平台按工作区隔离环境、A+B 无虚拟化、复用既有声明文件、容器降级为可选 profile；不做通用环境管理器 | 项目负责人/实现者 |
 | [18-agent-collaboration-workflow-proposal.zh-CN.md](18-agent-collaboration-workflow-proposal.zh-CN.md) | **方法提案（未实施）**：六十年流程史的存活原则、失效仪式清单、方向/批次/工作项三层节奏、人的四个介入点、新人六命令上手路径；配套 `loom plan` | 项目负责人/新人 |
