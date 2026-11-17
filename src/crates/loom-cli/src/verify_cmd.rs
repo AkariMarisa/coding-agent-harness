@@ -214,19 +214,41 @@ pub(crate) fn run_verify(
 
     fs::write(&log_path, log).with_context(|| format!("write {}", log_path.display()))?;
 
+    // Verdict consumption: review/judgment reports are parsed, not grepped.
+    // A missing or unparseable verdict fails fast — for these roles the
+    // verdict is the deliverable (AGENTS.md §10) — and the merge queue later
+    // consumes the parsed value (`task.blocked(code=review_changes)`, doc/03).
+    let report_text =
+        fs::read_to_string(workspace.join(&spec.output.report_path)).unwrap_or_default();
+    let verdict = match spec.role() {
+        loom_core::TaskRole::Review => loom_core::parse_review_verdict(&report_text),
+        loom_core::TaskRole::Judgment => loom_core::parse_judgment_decision(&report_text),
+        _ => None,
+    };
+    let verdict_missing = matches!(
+        spec.role(),
+        loom_core::TaskRole::Review | loom_core::TaskRole::Judgment
+    ) && verdict.is_none();
+
     let claim_status = claim.as_ref().map(|receipt| receipt.status);
     let claim_done = claim_status == Some(ReceiptStatus::Done);
     let all_pass = !evidence.is_empty()
         && evidence
             .iter()
             .all(|item| item.result == VerifyResult::Pass);
-    let passed = all_pass && claim_done;
+    // A review/judgment task without a parseable verdict has not passed, no
+    // matter what its acceptance says — the verdict is the deliverable.
+    let passed = all_pass && claim_done && !verdict_missing;
 
     // Keep the adapter's claim when verification cannot contradict it. A
     // `needs_input`/`blocked`/`budget_exceeded` run is not a model failure:
     // recording it as `task.failed` used to pollute the escalation counter
     // (doc/15 §2.1). A failed acceptance still wins over any claim.
-    let status = if passed || !all_pass {
+    let status = if verdict_missing {
+        // Acceptance can pass while the report itself is malformed; for a
+        // review/judgment task the verdict is the deliverable.
+        ReceiptStatus::Failed
+    } else if passed || !all_pass {
         if passed {
             ReceiptStatus::Done
         } else {
@@ -249,6 +271,7 @@ pub(crate) fn run_verify(
         .map(|receipt| receipt.report_path.clone())
         .filter(|path| !path.trim().is_empty())
         .unwrap_or_else(|| run.report_path().to_string_lossy().into_owned());
+    receipt.verdict = verdict;
 
     // Required artifacts.
     let mut artifacts = Vec::new();
@@ -277,7 +300,13 @@ pub(crate) fn run_verify(
     }
     receipt.artifacts = artifacts;
 
-    if !passed {
+    if verdict_missing {
+        receipt.next_hint = format!(
+            "{} report {} has no parseable verdict (review expects `verdict: pass|request_changes|human`; judgment expects a JSON `decision`)",
+            spec.role().as_str(),
+            spec.output.report_path
+        );
+    } else if !passed {
         if let Some(failure) = receipt
             .verify
             .iter()
@@ -322,6 +351,16 @@ pub(crate) fn run_verify(
                     ("exit".to_string(), json!(item.exit)),
                     ("log_path".to_string(), json!(item.log_path)),
                 ]),
+        )?;
+    }
+
+    if let Some(verdict) = verdict {
+        append_event(
+            project,
+            &loom_core::Event::new(&run.id, now_ms(), loom_core::EventType::TaskVerdict)
+                .task(task_id)
+                .attempt(attempt)
+                .data([("verdict".to_string(), json!(verdict.as_str()))]),
         )?;
     }
 

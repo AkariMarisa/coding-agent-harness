@@ -214,6 +214,9 @@ pub struct Receipt {
     pub blockers: Vec<String>,
     pub next_hint: String,
     pub report_path: String,
+    /// Parsed from the report for review/judgment tasks; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<crate::verdict::Verdict>,
 }
 
 fn default_version() -> String {
@@ -238,6 +241,7 @@ impl Receipt {
             blockers: Vec::new(),
             next_hint: String::new(),
             report_path: String::new(),
+            verdict: None,
         }
     }
 
@@ -475,6 +479,28 @@ mod tests {
 
         let bad_sha = "status: done\nbranch: b@\nverify: A1=pass; log=x\nreport: r\n";
         assert!(parse_four_line(bad_sha).is_err());
+    }
+
+    #[test]
+    fn verdict_is_optional_and_roundtrips() {
+        let plain = receipt();
+        let plain_text = serde_json::to_string(&plain).expect("json");
+        assert!(
+            !plain_text.contains("verdict"),
+            "absent verdict must be omitted for old-shape receipts"
+        );
+        let parsed: Receipt = serde_json::from_str(&plain_text).expect("parse");
+        assert_eq!(parsed.verdict, None);
+
+        let mut with_verdict = receipt();
+        with_verdict.verdict = Some(crate::verdict::Verdict::RequestChanges);
+        let text = serde_json::to_string(&with_verdict).expect("json");
+        let parsed: Receipt = serde_json::from_str(&text).expect("parse");
+        assert_eq!(
+            parsed.verdict,
+            Some(crate::verdict::Verdict::RequestChanges)
+        );
+        parsed.validate().expect("valid");
     }
 
     #[test]

@@ -24,6 +24,8 @@ pub enum EventType {
     TaskReceipt,
     #[serde(rename = "task.verify")]
     TaskVerify,
+    #[serde(rename = "task.verdict")]
+    TaskVerdict,
     #[serde(rename = "task.passed")]
     TaskPassed,
     #[serde(rename = "task.failed")]
@@ -61,6 +63,7 @@ impl EventType {
             Self::TaskStarted => "task.started",
             Self::TaskReceipt => "task.receipt",
             Self::TaskVerify => "task.verify",
+            Self::TaskVerdict => "task.verdict",
             Self::TaskPassed => "task.passed",
             Self::TaskFailed => "task.failed",
             Self::TaskEscalated => "task.escalated",
@@ -90,6 +93,7 @@ impl FromStr for EventType {
             "task.started" => Ok(Self::TaskStarted),
             "task.receipt" => Ok(Self::TaskReceipt),
             "task.verify" => Ok(Self::TaskVerify),
+            "task.verdict" => Ok(Self::TaskVerdict),
             "task.passed" => Ok(Self::TaskPassed),
             "task.failed" => Ok(Self::TaskFailed),
             "task.escalated" => Ok(Self::TaskEscalated),
@@ -208,6 +212,7 @@ impl Event {
                 | EventType::TaskStarted
                 | EventType::TaskReceipt
                 | EventType::TaskVerify
+                | EventType::TaskVerdict
                 | EventType::TaskPassed
                 | EventType::TaskFailed
                 | EventType::TaskEscalated

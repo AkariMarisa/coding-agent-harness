@@ -20,6 +20,7 @@
         "task.started",
         "task.receipt",
         "task.verify",
+        "task.verdict",
         "task.passed",
         "task.failed",
         "task.escalated",

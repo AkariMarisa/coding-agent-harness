@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result};
-use loom_core::compact_utc;
+use loom_core::{compact_utc, Receipt};
 use loom_store::{now_ms, Project, Run, RunMeta, RUN_META_VERSION};
 
 /// Generate a unique run id based on the current UTC second. The directory is
@@ -28,6 +28,16 @@ pub fn new_run_id(project: &Project, task_id: &str) -> String {
 
 /// Resolve which run belongs to a task. Prefers an explicit run id, then the
 /// most recent dispatch recorded in `run.json`.
+/// Latest receipt of a task's newest run, when that run exists and wrote one.
+/// Used by the merge queue to consume review verdicts; `None` means the review
+/// never ran (or its receipt is gone) — no verdict, no block.
+pub fn read_latest_receipt(project: &Project, task_id: &str) -> Option<Receipt> {
+    let run_id = find_run_for_task(project, task_id, None).ok()?;
+    let run = Run::open(project.clone(), Some(&run_id)).ok()?;
+    let text = fs::read_to_string(run.receipt_path()).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 pub fn find_run_for_task(project: &Project, task_id: &str, run_id: Option<&str>) -> Result<String> {
     if let Some(run_id) = run_id {
         return Ok(run_id.to_string());

@@ -381,6 +381,8 @@ After parsing the four lines, the runner generates `receipts/<task_id>.json` (th
 }
 ```
 
+> Review and judgment tasks carry an optional `verdict` on the receipt (`pass` | `request_changes` | `human` | `fix_plan` | `split` | `reject`), parsed from the report at `output.report_path` instead of grepped. A report without a parseable verdict fails the task. The verdict is also emitted as a `task.verdict` event and is consumed by the merge queue (§13): while reviews exist for the merged task but none has returned `pass`, merge is blocked with `task.blocked(code=review_changes)`; one `pass` clears standing objections.
+
 ### 5.4 Status Semantics
 
 | status | Meaning | Orchestrator action |
@@ -662,6 +664,7 @@ Escalation is allowed only in the following situations:
 | `task.started` | `pid`, `started_at` |
 | `task.receipt` | `status`, `branch`, `head_sha` |
 | `task.verify` | `acceptance_id`, `result`, `exit`, `log_path` |
+| `task.verdict` | `verdict` (`pass`/`request_changes`/`human`/`fix_plan`/`split`/`reject`; review/judgment tasks only) |
 | `task.passed` | `verify_ids` |
 | `task.failed` | `code`, `verify_ids` |
 | `task.escalated` | `escalation_id`, `decision` |
@@ -681,7 +684,7 @@ Escalation is allowed only in the following situations:
 - A failed event write does not block the main flow, but it must raise an alert.
 - Every event has a `run_id`; tasks spanning runs use `parent_run_id`.
 - Sensitive fields are redacted before writing.
-- Task state is derived by replaying events (`loom-core::status_after_event`): `task.created→pending`, `task.ready→ready`, `task.dispatched→dispatched`, `task.started→running`, `task.receipt→receipt`, `task.passed→passed`, `task.failed→failed`, `task.blocked→blocked`, `task.needs_input→needs_input`, `task.escalated→escalated`, `task.merged→merged`, `human.aborted→cancelled`; `task.verify` / `task.fallback` / budget events do not change state. `needs_input` / `blocked` are not failures: they can be dispatched again, and they **do not count** toward M3's `task.failed` escalation count; only an acceptance failure or an explicit adapter failure writes `task.failed`. `tasks.json` is just a view of this replay result.
+- Task state is derived by replaying events (`loom-core::status_after_event`): `task.created→pending`, `task.ready→ready`, `task.dispatched→dispatched`, `task.started→running`, `task.receipt→receipt`, `task.passed→passed`, `task.failed→failed`, `task.blocked→blocked`, `task.needs_input→needs_input`, `task.escalated→escalated`, `task.merged→merged`, `human.aborted→cancelled`; `task.verify` / `task.verdict` / `task.fallback` / budget events do not change state. `needs_input` / `blocked` are not failures: they can be dispatched again, and they **do not count** toward M3's `task.failed` escalation count; only an acceptance failure or an explicit adapter failure writes `task.failed`. `tasks.json` is just a view of this replay result.
 - `task.fallback` means a **same-tier model switch and rerun**: the `run_id` is the run of the new attempt, and `parent_run_id` points to the failed run; `attempt` does not change, so the escalation threshold (counting `task.failed`) is not polluted by the switch. Cross-tier model switches are triggered only by escalation, never by fallback.
 - Dependencies are considered satisfied only after `passed` / `merged`; circular dependencies and cross-goal dependencies are rejected when the index is written.
 
@@ -795,7 +798,7 @@ The file name is the first 12 hex digits of `sha256(path)` + `.lock` (paths cont
 - Failing to acquire a lock → write `task.blocked(code=lock_owner)`, never write forcibly; when the number of tasks holding locks exceeds `[parallel] max_running` → `task.blocked(code=parallel_cap)`; when the sum of concurrent tasks' `budget.max_cost_usd` exceeds `[parallel] max_inflight_cost_usd` → `task.blocked(code=inflight_budget)`. All three are retryable.
 - Locks are best-effort advisory: they scan before writing, but a TOCTOU window still exists; the no-lost-update guarantee comes from per-task worktrees and the serialized merge queue.
 - Locks are cleaned up when the guard releases (including the error path), and only the paths that guard wrote are released (nested guards do not release each other); leftovers are reclaimed by `loom doctor`.
-- The merge queue itself holds a global write lock (the `**` pattern, conflicting with all write sets); dispatch of write tasks pauses during a merge. The `loom merge` order: global lock → rerun acceptance before merge → base clean-tree check → `git rebase` (on conflict abort and `task.blocked(code=merge_conflict)`) → `git merge` → rerun acceptance on the base checkout (on failure roll back with `reset --hard` and `task.blocked(code=integration_verify)`) → `task.merged(merge_sha, base_before, integration_verify)` → clean up the worktree and branch. In-place tasks do not enter the queue (their changes are already on the base branch).
+- The merge queue itself holds a global write lock (the `**` pattern, conflicting with all write sets); dispatch of write tasks pauses during a merge. The `loom merge` order: review gate (blocks with `task.blocked(code=review_changes)` while no review of this task has returned `pass`) → global lock → rerun acceptance before merge → base clean-tree check → `git rebase` (on conflict abort and `task.blocked(code=merge_conflict)`) → `git merge` → rerun acceptance on the base checkout (on failure roll back with `reset --hard` and `task.blocked(code=integration_verify)`) → `task.merged(merge_sha, base_before, integration_verify)` → clean up the worktree and branch. In-place tasks do not enter the queue (their changes are already on the base branch).
 
 ## 14. Versions and Migration
 

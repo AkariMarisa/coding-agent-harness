@@ -213,4 +213,149 @@ loom board --format json | grep -q '"T-20261106-004"' || {
     exit 1
 }
 
+# --- Review verdict gate (doc/03): parse → fail fast → block/allow merge ---
+# The scenario needs git (worktree mode + a committed report fixture); the
+# rest of this file stays in-place and is unaffected.
+git -C /work/.smoke init -q
+git -C /work/.smoke symbolic-ref HEAD refs/heads/main
+git -C /work/.smoke config user.email smoke@example.com
+git -C /work/.smoke config user.name loom-smoke
+mkdir -p /work/.smoke/docs
+printf 'verdict: request_changes\n\nreasons: fixture\n' > /work/.smoke/docs/review.md
+printf 'verdict: pass\n\nreasons: fixture\n' > /work/.smoke/docs/review-pass.md
+printf 'no verdict in this report\n' > /work/.smoke/docs/review-empty.md
+git -C /work/.smoke add docs
+git -C /work/.smoke commit -qm "fixture: review reports"
+
+cat > /work/.smoke/task-g1.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-005",
+  "goal_id": "G-20261106-smoke",
+  "title": "gate fixture implement",
+  "role": "implement",
+  "tier": "worker",
+  "depends_on": [],
+  "workspace": {"mode": "worktree", "base_ref": "main", "branch": "agent/T-20261106-005", "allowed_paths": ["docs/**"], "forbidden_paths": []},
+  "inputs": [],
+  "constraints": {"max_files_touched": 2, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "true", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 5, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": ["verify_log"]}
+}
+EOF
+cat > /work/.smoke/task-g2.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-006",
+  "goal_id": "G-20261106-smoke",
+  "title": "gate fixture review",
+  "role": "review",
+  "tier": "worker",
+  "depends_on": ["T-20261106-005"],
+  "workspace": {"mode": "worktree", "base_ref": "main", "branch": "agent/T-20261106-006", "allowed_paths": ["docs/**"], "forbidden_paths": []},
+  "inputs": [],
+  "constraints": {"max_files_touched": 2, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "grep -q verdict docs/review.md", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 5, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": "docs/review.md", "required_artifacts": ["verify_log"]}
+}
+EOF
+cat > /work/.smoke/task-g3.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-007",
+  "goal_id": "G-20261106-smoke",
+  "title": "gate fixture review without verdict",
+  "role": "review",
+  "tier": "worker",
+  "depends_on": [],
+  "workspace": {"mode": "worktree", "base_ref": "main", "branch": "agent/T-20261106-007", "allowed_paths": ["docs/**"], "forbidden_paths": []},
+  "inputs": [],
+  "constraints": {"max_files_touched": 2, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "test -f docs/review-empty.md", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 5, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": "docs/review-empty.md", "required_artifacts": ["verify_log"]}
+}
+EOF
+cat > /work/.smoke/task-g2b.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-008",
+  "goal_id": "G-20261106-smoke",
+  "title": "gate fixture approving review",
+  "role": "review",
+  "tier": "worker",
+  "depends_on": ["T-20261106-005"],
+  "workspace": {"mode": "worktree", "base_ref": "main", "branch": "agent/T-20261106-008", "allowed_paths": ["docs/**"], "forbidden_paths": []},
+  "inputs": [],
+  "constraints": {"max_files_touched": 2, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "grep -q verdict docs/review-pass.md", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 5, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": "docs/review-pass.md", "required_artifacts": ["verify_log"]}
+}
+EOF
+loom task add --file /work/.smoke/task-g1.json > /dev/null
+loom task add --file /work/.smoke/task-g2.json > /dev/null
+loom task add --file /work/.smoke/task-g3.json > /dev/null
+loom task add --file /work/.smoke/task-g2b.json > /dev/null
+
+# g1: implement (worktree mode so `loom merge` can reach the review gate).
+loom dispatch T-20261106-005 --adapter mock > /dev/null
+loom verify T-20261106-005 --format json | grep -q '"passed": true' || {
+    echo "expected g1 to verify as passed" >&2; exit 1;
+}
+
+# g2: review whose fixture report says request_changes → parsed into the receipt.
+# verify's stdout is a summary envelope; verdict/next_hint live in the receipt
+# file it points at.
+loom dispatch T-20261106-006 --adapter mock > /dev/null
+loom verify T-20261106-006 --format json > /work/.smoke/verify-g2.json || true
+grep -q '"passed": true' /work/.smoke/verify-g2.json || {
+    echo "a review with a parseable verdict must still pass its own acceptance" >&2; exit 1;
+}
+g2_receipt=$(grep -o '"receipt": "[^"]*"' /work/.smoke/verify-g2.json | head -1 | sed 's/.*"receipt": "//; s/"$//')
+grep -q '"verdict": "request_changes"' "$g2_receipt" || {
+    echo "expected request_changes verdict in receipt" >&2; exit 1;
+}
+
+# The gate: g1 cannot merge while its review says request_changes.
+if loom merge T-20261106-005 --format json > /work/.smoke/merge-blocked.json; then
+    echo "expected the review gate to block merge of g1" >&2; exit 1;
+fi
+grep -q 'review_changes' /work/.smoke/.loom/events.jsonl || {
+    echo "expected task.blocked(code=review_changes)" >&2; exit 1;
+}
+
+# The block moved g1 to `blocked`; re-verify restores `passed` (its event
+# replays after the blocked one) so the approving review can be dispatched —
+# dependencies must be passed.
+loom verify T-20261106-005 --format json | grep -q '"passed": true' || {
+    echo "expected re-verify of g1 to restore passed" >&2; exit 1;
+}
+
+# A second review approves: one pass clears standing objections (a passed
+# task cannot be re-dispatched, so a re-review is always a new task).
+loom dispatch T-20261106-008 --adapter mock > /dev/null
+loom verify T-20261106-008 --format json > /work/.smoke/verify-g2b.json || true
+g2b_receipt=$(grep -o '"receipt": "[^"]*"' /work/.smoke/verify-g2b.json | head -1 | sed 's/.*"receipt": "//; s/"$//')
+grep -q '"verdict": "pass"' "$g2b_receipt" || {
+    echo "expected pass verdict from the approving review" >&2; exit 1;
+}
+
+# Retry after review_changes is allowed; the gate now sees pass.
+loom merge T-20261106-005 --format json | grep -q '"merged": true' || {
+    echo "expected g1 to merge after the review passed" >&2; exit 1;
+}
+
+# Fail fast: a review report without a verdict must fail verification.
+loom dispatch T-20261106-007 --adapter mock > /dev/null
+if loom verify T-20261106-007 --format json > /work/.smoke/verify-g3.json; then
+    echo "expected verify to fail when the report has no verdict" >&2; exit 1;
+fi
+g3_receipt=$(grep -o '"receipt": "[^"]*"' /work/.smoke/verify-g3.json | head -1 | sed 's/.*"receipt": "//; s/"$//')
+grep -q 'no parseable verdict' "$g3_receipt" || {
+    echo "expected a verdict hint in the failed receipt" >&2; exit 1;
+}
+
 echo "SMOKE_OK"

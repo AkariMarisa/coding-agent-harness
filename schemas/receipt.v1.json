@@ -99,6 +99,11 @@
     },
     "blockers": {"type": "array", "items": {"type": "string"}},
     "next_hint": {"type": "string"},
-    "report_path": {"type": "string", "minLength": 1}
+    "report_path": {"type": "string", "minLength": 1},
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "request_changes", "human", "fix_plan", "split", "reject"],
+      "description": "Parsed from the report for review/judgment tasks; absent otherwise."
+    }
   }
 }

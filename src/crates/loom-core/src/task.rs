@@ -151,6 +151,7 @@ pub fn status_after_event(current: TaskStatus, event: EventType) -> TaskStatus {
         EventType::RunStarted
         | EventType::GoalLoaded
         | EventType::TaskVerify
+        | EventType::TaskVerdict
         | EventType::TaskFallback
         | EventType::BudgetWarning
         | EventType::BudgetExceeded

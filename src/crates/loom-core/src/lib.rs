@@ -13,6 +13,7 @@ mod task;
 mod text;
 mod time;
 mod usage;
+mod verdict;
 
 pub use capability::{find_model, ModelCapability, ReasoningPassthrough, ThinkingMode, Tier, Wire};
 pub use config::{
@@ -40,3 +41,4 @@ pub use usage::{
     aggregate_usage, CostSource, UsageAggregate, UsageFilter, UsageRecord, UsageSource,
     USAGE_VERSION,
 };
+pub use verdict::{parse_judgment_decision, parse_review_verdict, Verdict};

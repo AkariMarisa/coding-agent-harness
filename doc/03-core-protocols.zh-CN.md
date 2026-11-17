@@ -381,6 +381,8 @@ runner 解析四行后，生成 `receipts/<task_id>.json`（实现写入 `.loom/
 }
 ```
 
+> review 与 judgment 任务的回执带可选 `verdict`（`pass` | `request_changes` | `human` | `fix_plan` | `split` | `reject`），从 `output.report_path` 的报告解析而非 grep；报告解析不出 verdict 时该任务判失败。verdict 同时以 `task.verdict` 事件发出，并被合并队列（§13）消费：当被合并任务存在 review 但无一返回 `pass` 时，以 `task.blocked(code=review_changes)` 阻断合并；一个 `pass` 清除既有异议。
+
 ### 5.4 状态语义
 
 | status | 含义 | orchestrator 动作 |
@@ -662,6 +664,7 @@ runner 为每条 acceptance 记录：
 | `task.started` | `pid`, `started_at` |
 | `task.receipt` | `status`, `branch`, `head_sha` |
 | `task.verify` | `acceptance_id`, `result`, `exit`, `log_path` |
+| `task.verdict` | `verdict`（`pass`/`request_changes`/`human`/`fix_plan`/`split`/`reject`；仅 review/judgment 任务） |
 | `task.passed` | `verify_ids` |
 | `task.failed` | `code`, `verify_ids` |
 | `task.escalated` | `escalation_id`, `decision` |
@@ -681,7 +684,7 @@ runner 为每条 acceptance 记录：
 - 事件写入失败不阻塞主流程，但必须告警。
 - 每个事件有 `run_id`；跨 run 的任务用 `parent_run_id`。
 - 敏感字段脱敏后再写。
-- 任务状态由事件重放得出（`loom-core::status_after_event`）：`task.created→pending`、`task.ready→ready`、`task.dispatched→dispatched`、`task.started→running`、`task.receipt→receipt`、`task.passed→passed`、`task.failed→failed`、`task.blocked→blocked`、`task.needs_input→needs_input`、`task.escalated→escalated`、`task.merged→merged`、`human.aborted→cancelled`；`task.verify` / `task.fallback` / 预算事件不改状态。`needs_input` / `blocked` 不是失败：它们可被再次 dispatch，且**不计入** M3 的 `task.failed` 升级计数；只有验收失败或 adapter 明确失败才写 `task.failed`。`tasks.json` 只是这个重放结果的视图。
+- 任务状态由事件重放得出（`loom-core::status_after_event`）：`task.created→pending`、`task.ready→ready`、`task.dispatched→dispatched`、`task.started→running`、`task.receipt→receipt`、`task.passed→passed`、`task.failed→failed`、`task.blocked→blocked`、`task.needs_input→needs_input`、`task.escalated→escalated`、`task.merged→merged`、`human.aborted→cancelled`；`task.verify` / `task.verdict` / `task.fallback` / 预算事件不改状态。`needs_input` / `blocked` 不是失败：它们可被再次 dispatch，且**不计入** M3 的 `task.failed` 升级计数；只有验收失败或 adapter 明确失败才写 `task.failed`。`tasks.json` 只是这个重放结果的视图。
 - `task.fallback` 表示**同层换模型重跑**：`run_id` 是新 attempt 的 run，`parent_run_id` 指向失败的 run；`attempt` 不变，所以升级阈值（数 `task.failed`）不会被切换污染。跨层换模型只由升级触发，不由 fallback 触发。
 - 依赖只在 `passed` / `merged` 后视为满足；循环依赖与跨 goal 依赖在写入索引时拒绝。
 
@@ -795,7 +798,7 @@ loom churn stats --by model --format pretty
 - 获取锁失败 → 写 `task.blocked(code=lock_owner)`，不强行写；持有锁的任务数超过 `[parallel] max_running` → `task.blocked(code=parallel_cap)`；并发任务 `budget.max_cost_usd` 之和超过 `[parallel] max_inflight_cost_usd` → `task.blocked(code=inflight_budget)`。三者都可重试。
 - 锁是 best-effort advisory：先整体扫描再写入，仍有 TOCTOU 窗口；不丢更新的保证来自 per-task worktree 与串行合并队列。
 - 锁在 guard 释放时清理（含错误路径），且只释放该 guard 写过的路径（嵌套 guard 不互相误释放）；残留由 `loom doctor` 回收。
-- 合并队列本身持有全局写锁（`**` 模式，与所有写集冲突）；合并期间暂停写任务派发。`loom merge` 的顺序：全局锁 → 合并前重跑 acceptance → base 干净树检查 → `git rebase`（冲突则 abort 并 `task.blocked(code=merge_conflict)`）→ `git merge` → 在 base checkout 重跑 acceptance（失败 `reset --hard` 回滚并 `task.blocked(code=integration_verify)`）→ `task.merged(merge_sha, base_before, integration_verify)` → 清理 worktree 与分支。in-place 任务不进队列（改动已在 base 分支上）。
+- 合并队列本身持有全局写锁（`**` 模式，与所有写集冲突）；合并期间暂停写任务派发。`loom merge` 的顺序：审查门（本任务的 review 无一返回 `pass` 时以 `task.blocked(code=review_changes)` 阻断）→ 全局锁 → 合并前重跑 acceptance → base 干净树检查 → `git rebase`（冲突则 abort 并 `task.blocked(code=merge_conflict)`）→ `git merge` → 在 base checkout 重跑 acceptance（失败 `reset --hard` 回滚并 `task.blocked(code=integration_verify)`）→ `task.merged(merge_sha, base_before, integration_verify)` → 清理 worktree 与分支。in-place 任务不进队列（改动已在 base 分支上）。
 
 ## 14. 版本与迁移
 

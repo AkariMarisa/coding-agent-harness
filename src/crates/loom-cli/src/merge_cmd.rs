@@ -9,19 +9,20 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
-use loom_core::{EventFilter, EventType, TaskStatus, WorkspaceMode};
+use loom_core::{EventFilter, EventType, TaskRole, TaskSpec, TaskStatus, WorkspaceMode};
 use loom_store::{
-    append_event, read_events, read_task, sync_index, task_status, LockError, LockGuard, Project,
+    append_event, read_events, read_task, read_tasks, sync_index, task_status, LockError,
+    LockGuard, Project,
 };
 use serde_json::json;
 
-use super::run_util::{append_blocked_event, find_run_for_task};
+use super::run_util::{append_blocked_event, find_run_for_task, read_latest_receipt};
 use super::verify_cmd::{run_command, run_verify};
 use super::Format;
 
-/// Block codes a previous failed merge may leave behind; only these let a
-/// `blocked` task back into the merge queue.
-const MERGE_BLOCK_CODES: [&str; 2] = ["merge_conflict", "integration_verify"];
+/// Block codes a previous failed merge (or a blocking review) may leave
+/// behind; only these let a `blocked` task back into the merge queue.
+const MERGE_BLOCK_CODES: [&str; 3] = ["merge_conflict", "integration_verify", "review_changes"];
 
 pub fn merge(project: &Project, task_id: &str, attempt: u32, format: Format) -> Result<i32> {
     let spec = read_task(project, task_id)?;
@@ -72,6 +73,42 @@ pub fn merge(project: &Project, task_id: &str, attempt: u32, format: Format) -> 
     // Global queue lock: `**` overlaps every write set, so merging both
     // serializes merges and pauses dispatching write tasks.
     let run_id = find_run_for_task(project, task_id, None)?;
+
+    // Review verdicts gate the merge (`doc/03`): block while reviews exist
+    // for this task but none has returned `pass`. One pass clears standing
+    // objections — a passed review cannot be re-dispatched, so a re-review is
+    // always a new task. A review that never ran emits no receipt and does
+    // not block (strict mode is doc/18 §8.1 v3).
+    let mut objections: Vec<String> = Vec::new();
+    let mut approved = false;
+    for review in review_dependents(project, task_id)? {
+        let Some(receipt) = read_latest_receipt(project, &review.task_id) else {
+            continue;
+        };
+        match receipt.verdict {
+            Some(verdict) if verdict.is_pass() => approved = true,
+            other => objections.push(format!(
+                "{}: {}",
+                review.task_id,
+                other.map(|verdict| verdict.as_str()).unwrap_or("missing")
+            )),
+        }
+    }
+    if !approved && !objections.is_empty() {
+        block_merge(
+            project,
+            &run_id,
+            task_id,
+            attempt,
+            "review_changes",
+            &json!({ "blocking_reviews": objections.join(", ") }),
+        )?;
+        bail!(
+            "task {task_id} blocked by reviews (none returned pass): {}",
+            objections.join(", ")
+        );
+    }
+
     let lease_s = spec.budget.max_wall_s.saturating_add(600);
     let _queue = match LockGuard::acquire(project, task_id, &run_id, &["**".to_string()], lease_s) {
         Ok(guard) => guard,
@@ -256,6 +293,16 @@ fn block_merge(
         }
     }
     append_blocked_event(project, run_id, task_id, attempt, data)
+}
+
+/// Review tasks that depend on `task_id` — the reviews that gate its merge.
+fn review_dependents(project: &Project, task_id: &str) -> Result<Vec<TaskSpec>> {
+    Ok(read_tasks(project)?
+        .into_iter()
+        .filter(|task| {
+            task.role() == TaskRole::Review && task.depends_on.iter().any(|dep| dep == task_id)
+        })
+        .collect())
 }
 
 fn last_block_code(project: &Project, task_id: &str) -> Option<String> {
