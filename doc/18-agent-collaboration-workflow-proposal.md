@@ -126,7 +126,7 @@ It does not depend on understanding agents' memory mechanisms and token economic
 
 1. Build `loom plan` (the core command of the open-a-batch ceremony, including non-interactive preview and human review of the diff);
 2. the methodology doc and the README quick-start land together with `loom plan`, with the commands and the ceremony validating each other;
-3. finish the remaining judgment gate of the four-step plan first; it corresponds to the last link of the machine gate and is also the precondition for the evolution of slice review.
+3. ~~finish the remaining judgment gate of the four-step plan first~~ **done (2026-11-17)**: it was the last link of the machine gate and the precondition for the evolution of slice review.
 
 ### 8.1 Evolution of slice review
 
@@ -138,6 +138,6 @@ The premise is that people get lazy as the engineering grows: once the change ex
 | **v2** | a review task (review role, frontier model) produces a verdict report with file/line references; the human reads the conclusion + spot-checks key diffs | reduced to reading the report |
 | **v3** | review intensity is configurable: strict mode requires `verdict: pass` before allowing merge, plus human final review; after trust accumulates it relaxes to proportional spot-checks | spot-checks only |
 
-Boundary: at all three levels the agent only produces suggestions and evidence; **the merge decision stays in the gating policy, the human keeps final approval and veto power; removing human review is out of scope for this proposal**. v2's precondition is that the judgment gate lands so the verdict is consumed by the gate (today verify only checks that the verdict string exists, see the four-step plan).
+Boundary: at all three levels the agent only produces suggestions and evidence; **the merge decision stays in the gating policy, the human keeps final approval and veto power; removing human review is out of scope for this proposal**. v2's precondition is met: the judgment gate landed on 2026-11-17 — verify parses the verdict into the receipt (failing fast when it is missing), emits `task.verdict`, and merge is blocked with `code=review_changes` while reviews exist but none has returned `pass` (one pass clears standing objections).
 
 Until `loom plan` lands, this document is only a proposal.

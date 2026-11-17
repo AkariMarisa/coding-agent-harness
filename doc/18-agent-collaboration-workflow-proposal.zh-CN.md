@@ -126,7 +126,7 @@ loom board / loom route stats                  # 看进度与复盘
 
 1. 建 `loom plan`（开批仪式的核心命令，含非交互预览与人审 diff）；
 2. 方法文档与 README 快速上手段随 `loom plan` 一起落地，命令与仪式互相验证；
-3. 四步计划剩余的 judgment gate 先收尾，它对应机器门的最后一环，也是审片演进的前提。
+3. ~~四步计划剩余的 judgment gate 先收尾~~ **已完成（2026-11-17）**：它是机器门的最后一环，也是审片演进的前提。
 
 ### 8.1 审片的演进
 
@@ -138,6 +138,6 @@ loom board / loom route stats                  # 看进度与复盘
 | **v2** | review 任务（review 角色、frontier 模型）产出带文件/行号引用的 verdict 报告；人读结论 + 抽查关键 diff | 降为读报告 |
 | **v3** | 审查强度可配置：严格模式要求 `verdict: pass` 才允许合并且人终审；信任积累后放松为按比例抽查 | 只剩抽查 |
 
-边界：agent 在三级里都只产出建议与证据，**合并决策始终在门禁策略里，人保留终审与否决权；取消人审不在提案范围内**。v2 的前提是 judgment gate 落地，让 verdict 被门消费（目前 verify 只检查 verdict 字样存在，见四步计划）。
+边界：agent 在三级里都只产出建议与证据，**合并决策始终在门禁策略里，人保留终审与否决权；取消人审不在提案范围内**。v2 的前提已满足：judgment gate 于 2026-11-17 落地——verify 解析 verdict 写入回执（缺失即 fail fast）、发出 `task.verdict` 事件，存在 review 但无一返回 `pass` 时以 `code=review_changes` 阻断合并（一个 `pass` 清除既有异议）。
 
 在 `loom plan` 落地前，本文只是提案。
