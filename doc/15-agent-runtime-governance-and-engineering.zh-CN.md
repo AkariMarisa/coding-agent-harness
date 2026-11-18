@@ -218,12 +218,22 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 ### 2.1 现状（这是一个正确性缺陷 + 一个可见性缺陷）
 
-> **实现状态（2026-11-09，正确性缺陷已修）**：`TaskStatus::NeedsInput` +
-> `task.needs_input` 事件已接入；`loom verify` 在验收全过时保留 adapter 的
-> claim 状态（`needs_input` / `blocked` / `budget_exceeded` 不再写成
-> `task.failed`），`dispatch` 接受 `needs_input` 重新派发，看板新增
-> `needs_input` 列。M3 升级计数因此不再被提问污染。可见性部分（attention
-> inbox）仍未做，见 §2.2。
+> **实现状态（2026-11-18，问答协议已落地；正确性缺陷 2026-11-09 已修）**：
+> §2.4/§2.6 的完整握手现在能跑通：native 执行器新增 `ask` 工具，校验载荷（scope 枚举、
+> ≤3 个 blocking、options/recommended/default 一致性）后写 `outbox/questions.json`
+> （schema `schemas/questions.v1.json`），并以 `needs_input` + 退出码 2 结束运行；
+> `loom verify` 给 `task.needs_input` 补上 `question_ids`/`scopes`/`blocking`；
+> `loom answer <task> -q Q1 -c A [--rationale] [--by]` 把选择记入
+> `.loom/answers/<task>.json` 并发出 `task.answered`——**仅当没有 blocking 问题悬而未决时**
+> 才把 `needs_input → ready`（带守卫的状态臂绝不会把更晚的状态往回拉）。答案按
+> `(question_id, run_id)` 配对，因为 id 每轮都从 `Q1` 重新开始。下一个 packet 经
+> failure pack 携带问答：已答的渲染成 `answered: A — rationale`，未答的渲染成 `PENDING`
+> 并附选项与默认值。更早（2026-11-09）：接入 `TaskStatus::NeedsInput` + `task.needs_input`，
+> `loom verify` 在验收全过时保留 adapter 的 claim 状态（`needs_input` / `blocked` /
+> `budget_exceeded` 不再写成 `task.failed`），`dispatch` 接受 `needs_input` 重新派发，
+> 看板新增 `needs_input` 列，M3 升级计数因此不再被提问污染。仍未做：可见性部分
+> （attention inbox，§2.2）与假设台账（§2.7）——`attention.opened`/`attention.resolved`
+> 本轮刻意推迟，因此这里声明一处对 §2.5 联动表的偏差。
 
 当前链路（修复前）：
 
@@ -415,6 +425,8 @@ adapter 需要输入时：
 - 退出码 `2`；
 - 进程以 `stdin = /dev/null` 启动（已发生的交互式询问立即 EOF，而不是挂起）。
 
+> 对外 Schema：[`schemas/questions.v1.json`](../schemas/questions.v1.json)；实现为 `loom-core::QuestionsFile`。回答侧（`.loom/answers/<task>.json`，`loom-core::AnswersFile`）属控制面内部文件，刻意不建 schema。
+
 `questions.json` v1：
 
 ```json
@@ -525,7 +537,7 @@ adapter 需要输入时：
 - `attempt` 不变（提问不是失败），另记 `question_round`；
 - 失败包只带未回答问题，不带已答问题。
 
-`loom answer` 写 `answers.json` 的同时写 `task.answered` 与 `attention.resolved`，所以回答后对应 inbox 事项立即消失；`--choice` 也允许直接按 `recommended`/`default` 批量回答非阻塞问题。
+`loom answer` 写 `.loom/answers/<task>.json` 并发出 `task.answered`；**仅当没有 blocking 问题悬而未决时**才把任务送回 `ready`——在 blocking 仍开着时回答可选问题，只记录选择、任务留在 `needs_input`。答案按 `(question_id, run_id)` 配对，因为问题 id 每轮都从 `Q1` 重新开始。按 `recommended`/`default` 批量回答的 `--choice`、以及回答时写 `attention.resolved`，尚未实现（inbox 属 §2.2，已推迟——见上方状态注记声明的偏差）。
 
 ### 2.7 假设账本
 
@@ -1201,7 +1213,8 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [ ] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。
 - [ ] 人类命令在 TTY 下 stderr 出现一行 footer；`--json` stdout 不含 footer；非 TTY/CI 不打印；`LOOM_NO_INBOX=1` 可关闭。
 - [ ] `loom inbox` 同时显示问题与操作类事项；`loom inbox --check` 在存在 `blocking` 时退出 `2`；`ack` 不关闭事项，`defer` 只作用于 `soon/info`。
-- [ ] 脚本化 provider 调用 `ask` 工具 → `questions.json` → exit 2 → `loom inbox` 可见 → `loom answer` → 新 run 收到答案并通过 verify。
+- [x] 脚本化 provider 调用 `ask` 工具 → `questions.json` → exit 2 → `loom answer` → 任务回到 `ready` 且下一个 packet 带上答案（2026-11-18；中间的 `loom inbox` 一环属已推迟的 §2.2 inbox）。
+- [ ] 同一条链路补上中间的 attention inbox：`task.needs_input` 开 `question` 事项，`loom answer` 关闭它。
 - [ ] 脚本化 provider 对同一 8KB 文件连续重写 5 次；无投影时 input 随步数复利增长，有投影时有界。
 - [ ] `churn.json` 输出 `rewrite_output_tokens`、`history_carry_tokens`、`avoided_input_tokens`、`wasted_tokens_est`，并标 `estimated`。
 - [ ] 第 2 次重写后旧 payload 被投影；第 3 次无 `mode=replace` 的 `write` 被短错误拒绝；L3 触发后重启只带 churn 摘要。

@@ -218,12 +218,23 @@ External agents own their own conversation history, so Loom cannot project step 
 
 ### 2.1 Current state (this is a correctness defect + a visibility defect)
 
-> **Implementation status (2026-11-09, correctness defect fixed)**: `TaskStatus::NeedsInput` +
-> `task.needs_input` event wired in; `loom verify` now keeps the adapter's claim status when
-> acceptance fully passes (`needs_input` / `blocked` / `budget_exceeded` are no longer written as
-> `task.failed`), `dispatch` accepts `needs_input` for re-dispatch, and the board gained a
-> `needs_input` column. M3 escalation counts are therefore no longer polluted by questions. The
-> visibility part (attention inbox) is still not done, see §2.2.
+> **Implementation status (2026-11-18, Q&A protocol landed; correctness defect fixed 2026-11-09)**:
+> The full §2.4/§2.6 handshake now runs: the native executor has an `ask` tool that validates the
+> payload (scope enum, ≤3 blocking, options/recommended/default consistency), writes
+> `outbox/questions.json` (schema `schemas/questions.v1.json`), and ends the run as `needs_input`
+> with exit 2; `loom verify` enriches `task.needs_input` with `question_ids`/`scopes`/`blocking`;
+> `loom answer <task> -q Q1 -c A [--rationale] [--by]` records the choice in
+> `.loom/answers/<task>.json` and emits `task.answered`, which moves `needs_input → ready` **only
+> when no blocking question stays open** (the guarded arm never pulls a later state backwards).
+> Answers pair by `(question_id, run_id)` because ids restart at `Q1` every run. The next packet
+> carries the Q&A through the failure pack: answered questions render as `answered: A — rationale`,
+> open ones as `PENDING` with their options and default. Earlier (2026-11-09): `TaskStatus::NeedsInput`
+> + `task.needs_input` wired in, `loom verify` keeps the adapter's claim status when acceptance fully
+> passes (`needs_input` / `blocked` / `budget_exceeded` are no longer written as `task.failed`),
+> `dispatch` accepts `needs_input` for re-dispatch, and the board gained a `needs_input` column, so M3
+> escalation counts are no longer polluted by questions. Still not done: the visibility part
+> (attention inbox, §2.2) and the assumption ledger (§2.7) — `attention.opened`/`attention.resolved`
+> are deliberately deferred, so this round declares a deviation from the §2.5 linkage table.
 
 Current flow (before the fix):
 
@@ -415,6 +426,8 @@ When an adapter needs input:
 - exit code `2`;
 - the process is started with `stdin = /dev/null` (any interactive prompt already in flight gets immediate EOF instead of hanging).
 
+> External Schema: [`schemas/questions.v1.json`](../schemas/questions.v1.json); the implementation is `loom-core::QuestionsFile`. The answer side (`.loom/answers/<task>.json`, `loom-core::AnswersFile`) is control-plane internal and deliberately has no schema.
+
 `questions.json` v1:
 
 ```json
@@ -525,7 +538,7 @@ Next `dispatch` / `resume`:
 - `attempt` does not change (asking is not a failure), and `question_round` is recorded separately;
 - the failure packet carries only unanswered questions, never answered ones.
 
-`loom answer` writes `answers.json` and, at the same time, `task.answered` and `attention.resolved`, so the corresponding inbox item disappears immediately after answering; `--choice` also allows batch-answering non-blocking questions straight from `recommended`/`default`.
+`loom answer` writes `.loom/answers/<task>.json` and emits `task.answered`; it moves the task back to `ready` only once **no blocking question stays open** — an answer to an optional question while a blocking one is outstanding records the choice but leaves the task in `needs_input`. Answers pair by `(question_id, run_id)` because question ids restart at `Q1` every run. `--choice` batch-answering from `recommended`/`default`, and `attention.resolved` on answer, are not implemented yet (the inbox is §2.2, deferred — declared deviation in the status note above).
 
 ### 2.7 Assumption ledger
 
@@ -1201,7 +1214,8 @@ Notes:
 - [ ] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears.
 - [ ] On a TTY, human commands print one footer line on stderr; `--json` stdout contains no footer; nothing is printed for non-TTY/CI; `LOOM_NO_INBOX=1` turns it off.
 - [ ] `loom inbox` shows both question and operation items; `loom inbox --check` exits `2` when any `blocking` exists; `ack` does not close an item, `defer` applies only to `soon/info`.
-- [ ] A scripted provider calls the `ask` tool → `questions.json` → exit 2 → visible in `loom inbox` → `loom answer` → a new run receives the answer and passes verify.
+- [x] A scripted provider calls the `ask` tool → `questions.json` → exit 2 → `loom answer` → the task returns to `ready` and the next packet carries the answer (2026-11-18; the `loom inbox` hop in the middle is the deferred §2.2 inbox).
+- [ ] The same chain with the attention inbox in the middle: `task.needs_input` opens a `question` item, `loom answer` resolves it.
 - [ ] A scripted provider rewrites the same 8KB file 5 times in a row; without projection, input compounds with step count; with projection, it is bounded.
 - [ ] `churn.json` outputs `rewrite_output_tokens`, `history_carry_tokens`, `avoided_input_tokens`, `wasted_tokens_est`, marked `estimated`.
 - [ ] After the 2nd rewrite the old payload is projected; the 3rd `write` without `mode=replace` is rejected with a short error; after L3 triggers, the restart carries only a churn summary.
