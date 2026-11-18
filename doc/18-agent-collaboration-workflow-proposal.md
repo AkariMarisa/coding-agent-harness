@@ -96,6 +96,17 @@ Other than these, humans do not participate. All four are judgment work and cann
 | agent | only the work items already sliced, delivering acceptance evidence | does not pick topics, does not change acceptance, does not touch forbidden zones; when stuck it submits a report instead of forcing it |
 | control plane (Loom) | orchestration, acceptance, bookkeeping, alerting, replaying progress | does not make business judgments, does not decide priority for the human |
 
+### 5.5 Known gap: reactive human-in-the-loop work
+
+The cadence in §5.2 assumes work can be sliced before it starts. A 10-day real-session baseline ([19](19-real-session-baseline.md)) shows the dominant shape in practice is the opposite: the human tests on a device, reports what broke, the agent fixes it, the next report arrives hours later — one item at a time, verified by a person watching in real time.
+
+Two parts of this shape do not fit:
+
+- **No first-class entry for a single arriving report.** The technical path exists (`loom task add` → `dispatch` → `verify` → `merge`; #24 in [14](14-current-issues-and-blockers.md) §9 used exactly it), but the method speaks in batches, so a lone bug report has no home and in practice never enters the control plane. Observed: `.loom/` was initialized in that repository, its last event is the #24 merge, and the following 10 days of conversation never touched it again.
+- **The observe-fix-observe loop does not fit dispatch→verify→merge.** When acceptance is a person watching a phone screen in real time, there is no executable command to run between attempts; the "verify" is the next human observation.
+
+Not a non-goal, not yet a design: what is missing is a **hot-slice path** — one report becomes one task immediately, runs, and merges on its own, without waiting for a batch to open — plus an honest account of which part of real-time observation stays human. Until that exists, reactive work lives in a direct session and inherits none of the token levers ([19](19-real-session-baseline.md) §3). Recorded here so the cadence is not mistaken for complete.
+
 ## 6. Newcomer onboarding path
 
 The whole skill is two decisions plus six commands:

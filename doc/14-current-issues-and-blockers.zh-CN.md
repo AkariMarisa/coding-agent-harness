@@ -170,3 +170,5 @@ make check
 **环境（`dev.sh` 新增，均同路径挂载、rootless podman 无属主问题）**：`LOOM_TARGET_REPO` / `LOOM_ANDROID_SDK` / `LOOM_JAVA_HOME` / `LOOM_GRADLE_HOME` / `LOOM_MAVEN_HOME`（HOME 指向其父目录）；Robolectric 依赖用 `.loom/robolectric-init.gradle`（`maven.repo.local`）离线化，验收 A1 带 `--init-script`；JDK21+SDK34+Gradle 缓存全部复用宿主。
 
 **遗留**：`#25`（编辑队列）与 `#22`（profile 批量下载）是大功能，按当前配额余量不足以开工，待配额补充后再做；churn 投影（步骤级上下文重编译）已落地并用官方 deepseek 实测（完整历史 16–17KB 时单步 input 降 46%–55%，见 [16](16-runtime-governance-adoption-assessment.zh-CN.md) §8.8），可作为开工后的成本基线。
+
+**后续（2026-11-19）**：同一仓库此后把 10 天的工作跑成一个直连 OpenCode 会话、全程没有 Loom——2,739 次调用、949M cache read、`.loom/` 在 #24 合并后无人再碰。该会话就是 [19](19-real-session-baseline.zh-CN.md) 里的实测基线；本 §9 是同一仓库 Loom 驱动的那一侧。

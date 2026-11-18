@@ -149,6 +149,29 @@ loom route stats                 # 按事件日志统计 worker 占比、升级/
 
 `route stats` 以每个任务最后一次派发计算 worker 占比；重试计入 `dispatches`，但不重复计任务；`fallbacks` 是 `task.fallback` 事件数。这是 M3 退出标准里 “worker ≥50%” 的直接数据来源。
 
+## 实证：一个没有 Loom 的 10 天会话花掉多少
+
+一个真实仓库把 10 天的工作（修 bug、两台手机实机测试、F-Droid 发版、设计探索）跑成单个不断膨胀的 OpenCode 会话，全程没有 Loom。数据取自本地会话存储（[完整基线](doc/19-real-session-baseline.zh-CN.md)）：
+
+| 指标 | 实测值 |
+|---|---:|
+| 模型调用 | 2,739 次（95 个人类轮次） |
+| Cache read（每次调用重发的上下文） | **949M tokens** |
+| 单次调用平均上下文 | **约 346k tokens**，峰值约 900k，7 次 compaction 重建 |
+| 背在上下文里的截图 | 201 次 read，26.8MB base64 |
+| 实机测试日（10 天中的 3 天） | 占全部 cache read 的 64% |
+| 显式"现在什么状态"发问 | 3 次，另有 2 次手工汇总"你需要我配合什么" |
+
+Loom 对每一条的处理方式，以及各自主张的证据等级：
+
+- **有界 packet 代替膨胀的对话记录**——每次运行按角色从 ≤30k/24k/8k tokens 起步（已实现；预算是代码，尚无规模级实测）；
+- **每个工作项一个上下文**——历史不跨项累积，compaction 重建归零（已实现；聚合效果未实测）；
+- **步进投影**——旧工具结果压成首行 + 引用（**实测：单步 input 降 46%~55%**，[16 §8.8](doc/16-runtime-governance-adoption-assessment.zh-CN.md)，n=1）；
+- **事件日志代替问模型**——`loom board` 重放状态；那个会话把测试计划重读了 95 次；
+- **Attention inbox 代替手工汇总协调**——已设计、未实现（[15 §2.2](doc/15-agent-runtime-governance-and-engineering.zh-CN.md)）。
+
+算术投影，待 native vs adapter A/B 验证：同样负载跑在平均 100–150k 的上下文里，cache read 落在 **约 300–400M，即 −55%~65%**。那个仓库里唯一一个 Loom 驱动的任务每步 input 12–31k（[14 §9](doc/14-current-issues-and-blockers.zh-CN.md)），比会话平均值低一个数量级。完整假设与暴露出的缺口（反应式人在环工作尚无入口，见 [18 §5.5](doc/18-agent-collaboration-workflow-proposal.zh-CN.md)）见 [doc/19](doc/19-real-session-baseline.zh-CN.md)。
+
 ## 设计入口
 
 - 只看一篇：[08-design-roadmap-v0.2.zh-CN.md](doc/08-design-roadmap-v0.2.zh-CN.md)
