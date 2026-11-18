@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.local/schema/questions.v1.json",
+  "title": "Questions",
+  "description": "What an executor wrote to outbox/questions.json when it stopped for input (exit 2). The answer side (.loom/answers/<task>.json) is control-plane internal and has no schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "task_id", "run_id", "questions"],
+  "properties": {
+    "v": {"const": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/question"}
+    }
+  },
+  "$defs": {
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "question", "blocking", "scope", "options"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Q1, Q2, ... unique within the run; restarts every run, so answers pair by (question_id, run_id)."},
+        "question": {"type": "string", "minLength": 1},
+        "why_now": {"type": "string", "description": "Why this blocks now rather than later."},
+        "blocking": {"type": "boolean", "description": "True stops the task until answered; at most 3 per run."},
+        "scope": {
+          "enum": ["implementation", "design", "contract", "security", "budget", "scope"],
+          "description": "Who may answer (doc/15 §2.6 authorization matrix)."
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/option"}
+        },
+        "recommended": {"type": "string", "minLength": 1, "description": "Option id the executor recommends; must exist in options."},
+        "default": {"type": "string", "minLength": 1, "description": "Option id to proceed with when the question is non-blocking; must exist in options."},
+        "reversible": {"type": "boolean", "default": false},
+        "evidence": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Path/artifact references only, never full text."
+        },
+        "ttl_s": {"type": "integer", "minimum": 1, "description": "Expiry; past it the default applies or the question blocks again."}
+      }
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "consequence": {"type": "string"}
+      }
+    }
+  }
+}

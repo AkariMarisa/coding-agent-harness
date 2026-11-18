@@ -20,6 +20,7 @@ use loom_tools::{
 };
 
 mod adapter_cmd;
+mod answer_cmd;
 mod board_cmd;
 mod churn_cmd;
 mod config_cmd;
@@ -139,6 +140,23 @@ enum Command {
     Task {
         #[command(subcommand)]
         command: TaskCommand,
+    },
+    /// Answer questions an adapter asked (`outbox/questions.json`).
+    Answer {
+        /// Task waiting in needs_input.
+        task_id: String,
+        /// Question id to answer; repeat to pair with repeated -c in order.
+        #[arg(short = 'q', long = "question")]
+        questions: Vec<String>,
+        /// Option id chosen for the matching -q.
+        #[arg(short = 'c', long = "choice")]
+        choices: Vec<String>,
+        /// Why this choice; applies to every -q in this invocation.
+        #[arg(long)]
+        rationale: Option<String>,
+        /// Who answers: human | judgment | policy | spec.
+        #[arg(long, default_value = "human")]
+        by: String,
     },
     /// Inspect the append-only event log.
     Event {
@@ -589,6 +607,21 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Task { command } => {
             task_cmd::task(&project, command, cli.run.as_deref(), cli.format)
         }
+        Command::Answer {
+            task_id,
+            questions,
+            choices,
+            rationale,
+            by,
+        } => answer_cmd::answer(
+            &project,
+            &task_id,
+            &questions,
+            &choices,
+            rationale.as_deref(),
+            &by,
+            cli.format,
+        ),
         Command::Event { command } => {
             event_cmd::events(&project, command, cli.run.as_deref(), cli.format)
         }

@@ -343,6 +343,7 @@ pub fn run(
         let mut mutated = false;
         let mut verified = false;
         let mut finish_call: Option<ToolCall> = None;
+        let mut asked: Option<String> = None;
         let write_mark = toolbox.write_log().len();
         for call in &calls {
             if call.name == "finish" {
@@ -351,6 +352,30 @@ pub fn run(
             }
             if let Some(step) = pending.as_mut() {
                 step.row.tool_names.push(call.name.clone());
+            }
+            // `ask` is not a toolbox tool: it validates its payload, writes
+            // `outbox/questions.json`, and ends the run (`doc/15` §2.4). A
+            // bad payload comes back as a tool error so the model retries.
+            if call.name == "ask" {
+                match write_questions(request, &call.arguments) {
+                    Ok(summary) => {
+                        messages.push(ChatMessage::tool(
+                            call.id.clone(),
+                            "ask",
+                            format!("{summary}; the run stops until answered"),
+                        ));
+                        asked = Some(summary);
+                        break;
+                    }
+                    Err(error) => {
+                        messages.push(ChatMessage::tool(
+                            call.id.clone(),
+                            "ask",
+                            format!("tool error: {error}"),
+                        ));
+                    }
+                }
+                continue;
             }
             let observation = match toolbox.execute(&call.name, &call.arguments) {
                 Ok(result) => {
@@ -383,6 +408,14 @@ pub fn run(
                     step.row.rewrite_count += 1;
                 }
             }
+        }
+
+        // A successful `ask` already wrote `outbox/questions.json`; it wins
+        // over a co-batched `finish` — the run ends as `needs_input`, because
+        // a question is a return value, not a pause (`doc/15` §2.3).
+        if let Some(summary) = asked {
+            finished = Some(Finish::needs_input(summary));
+            break;
         }
 
         if let Some(call) = finish_call {
@@ -517,10 +550,55 @@ impl Finish {
         }
     }
 
+    /// A structured question ended the run (`doc/15` §2.4): exit 2, the
+    /// questions are already on disk in `outbox/questions.json`.
+    fn needs_input(summary: String) -> Self {
+        Self {
+            status: "needs_input".into(),
+            summary,
+            report: None,
+        }
+    }
+
     fn fail(&mut self, summary: String) {
         self.status = "failed".into();
         self.summary = summary;
     }
+}
+
+/// Validate an `ask` payload and write `outbox/questions.json`.
+///
+/// The payload is the `questions` array only; `v`/`task_id`/`run_id` come
+/// from the run, so a model cannot ask on behalf of another task. Any error
+/// is returned as a tool error for the model to fix, never fatal to the run.
+fn write_questions(request: &NativeRequest, arguments: &str) -> Result<String, String> {
+    let value: Value = serde_json::from_str(arguments)
+        .map_err(|error| format!("arguments are not valid JSON: {error}"))?;
+    let raw = value
+        .get("questions")
+        .ok_or_else(|| "missing `questions` array".to_string())?;
+    let questions: Vec<loom_core::Question> = serde_json::from_value(raw.clone())
+        .map_err(|error| format!("invalid question: {error}"))?;
+    let file = loom_core::QuestionsFile {
+        v: loom_core::QUESTIONS_VERSION,
+        task_id: request.task_id.clone(),
+        run_id: request.run_id.clone(),
+        questions,
+    };
+    file.validate()?;
+    let path = request.output_dir.join("questions.json");
+    let text = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
+    fs::write(&path, format!("{text}\n"))
+        .map_err(|error| format!("write {}: {error}", path.display()))?;
+    let blocking = file
+        .questions
+        .iter()
+        .filter(|question| question.blocking)
+        .count();
+    Ok(format!(
+        "wrote {} question(s), {blocking} blocking, to questions.json",
+        file.questions.len()
+    ))
 }
 
 fn parse_finish(call: &ToolCall) -> Finish {
@@ -707,6 +785,52 @@ fn tool_schema() -> Value {
                         "report": {"type": "string"}
                     },
                     "required": ["status", "summary"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ask",
+                "description": "Ask a structured question and end the run so a human/parent can answer (exit 2). Use only when the decision is irreversible, security/scope/budget related, or needs design judgment; reversible implementation choices should just take the default. At most 3 blocking questions per run.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "questions": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string", "description": "Q1, Q2, ... unique within the run"},
+                                    "question": {"type": "string"},
+                                    "why_now": {"type": "string", "description": "why this blocks now, not later"},
+                                    "blocking": {"type": "boolean"},
+                                    "scope": {"type": "string", "enum": ["implementation", "design", "contract", "security", "budget", "scope"]},
+                                    "options": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {"type": "string"},
+                                                "label": {"type": "string"},
+                                                "consequence": {"type": "string"}
+                                            },
+                                            "required": ["id", "label"]
+                                        }
+                                    },
+                                    "recommended": {"type": "string", "description": "option id you recommend"},
+                                    "default": {"type": "string", "description": "option id to proceed with if non-blocking"},
+                                    "reversible": {"type": "boolean"},
+                                    "evidence": {"type": "array", "items": {"type": "string"}, "description": "path/artifact references only, never full text"},
+                                    "ttl_s": {"type": "integer"}
+                                },
+                                "required": ["id", "question", "blocking", "scope", "options"]
+                            }
+                        }
+                    },
+                    "required": ["questions"]
                 }
             }
         }
@@ -1573,5 +1697,153 @@ mod tests {
         // Non-acceptance bash and observations without an exit line yield nothing.
         assert!(acceptance_evidence(&spec, r#"{"cmd":"echo hi"}"#, observation).is_none());
         assert!(bash_exit("no exit line here").is_none());
+    }
+
+    /// A well-formed `ask` writes `outbox/questions.json` and ends the run
+    /// as `needs_input` with exit 2 (`doc/15` §2.4).
+    #[test]
+    fn ask_writes_questions_and_stops_the_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let script = json!([
+            {
+                "tool_calls": [{
+                    "name": "ask",
+                    "arguments": {
+                        "questions": [{
+                            "id": "Q1",
+                            "question": "Stay compatible with the old schema?",
+                            "why_now": "the migration rewrites the users table",
+                            "blocking": true,
+                            "scope": "design",
+                            "options": [
+                                {"id": "A", "label": "dual-write one version", "consequence": "safe rollback"},
+                                {"id": "B", "label": "new schema only", "consequence": "old clients break"}
+                            ],
+                            "recommended": "A",
+                            "default": "A",
+                            "reversible": false,
+                            "evidence": ["src/db/migrate.rs:40-90"]
+                        }]
+                    }
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            },
+            {
+                "tool_calls": [{
+                    "name": "finish",
+                    "arguments": {"status": "done", "summary": "must not run"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }
+        ]);
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, None).expect("run");
+        assert_eq!(outcome.status, "needs_input", "{outcome:?}");
+        assert_eq!(outcome.exit_code, 2);
+
+        let text =
+            fs::read_to_string(request.output_dir.join("questions.json")).expect("questions.json");
+        let file: loom_core::QuestionsFile = serde_json::from_str(&text).expect("parse");
+        assert_eq!(file.v, 1);
+        assert_eq!(file.task_id, "T-20261106-001");
+        assert_eq!(file.run_id, "R-20261106-001");
+        assert_eq!(file.questions.len(), 1);
+        assert_eq!(file.questions[0].id, "Q1");
+        assert!(file.questions[0].blocking);
+        assert_eq!(file.questions[0].scope.as_str(), "design");
+        file.validate().expect("valid");
+
+        let final_text = fs::read_to_string(request.output_dir.join("final.md")).expect("final");
+        assert!(final_text.starts_with("status: needs_input\n"));
+        // The scripted second step (finish) never ran: ask wins the batch.
+        assert!(!request.output_dir.join("receipt.json").exists());
+    }
+
+    /// An invalid `ask` payload comes back as a tool error and the model
+    /// retries; the run only stops once the payload validates.
+    #[test]
+    fn invalid_ask_returns_a_tool_error_and_the_model_retries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let script = json!([
+            {
+                "tool_calls": [{
+                    "name": "ask",
+                    "arguments": {"questions": [{
+                        "id": "Q1",
+                        "question": "Which way?",
+                        "blocking": true,
+                        "scope": "not-a-scope",
+                        "options": [{"id": "A", "label": "a"}]
+                    }]}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            },
+            {
+                "tool_calls": [{
+                    "name": "ask",
+                    "arguments": {"questions": [{
+                        "id": "Q1",
+                        "question": "Which way?",
+                        "blocking": true,
+                        "scope": "security",
+                        "options": [{"id": "A", "label": "a"}, {"id": "B", "label": "b"}]
+                    }]}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }
+        ]);
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, None).expect("run");
+        assert_eq!(outcome.status, "needs_input", "{outcome:?}");
+
+        let text =
+            fs::read_to_string(request.output_dir.join("questions.json")).expect("questions.json");
+        let file: loom_core::QuestionsFile = serde_json::from_str(&text).expect("parse");
+        assert_eq!(file.questions[0].scope.as_str(), "security");
+        // The failed attempt did not leave a partial file behind: only the
+        // validated payload is ever written.
+        assert_eq!(file.questions.len(), 1);
+    }
+
+    /// More than 3 blocking questions is rejected by `validate`, not by the
+    /// tool schema — the model gets the merge/split hint as a tool error.
+    #[test]
+    fn ask_rejects_more_than_three_blocking_questions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let request = request(dir.path());
+        let questions: Vec<Value> = (1..=4)
+            .map(|n| {
+                json!({
+                    "id": format!("Q{n}"),
+                    "question": format!("Question {n}?"),
+                    "blocking": true,
+                    "scope": "budget",
+                    "options": [{"id": "A", "label": "a"}]
+                })
+            })
+            .collect();
+        let script = json!([
+            {
+                "tool_calls": [{"name": "ask", "arguments": {"questions": questions}}],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            },
+            {
+                "tool_calls": [{
+                    "name": "finish",
+                    "arguments": {"status": "blocked", "summary": "gave up"}
+                }],
+                "usage": {"input_tokens": 100, "output_tokens": 10}
+            }
+        ]);
+        let mut provider = ScriptedProvider::parse(&script.to_string()).expect("script");
+        let outcome = run(&request, &mut provider, None).expect("run");
+        // The model fell back to finish after the tool error.
+        assert_eq!(outcome.status, "blocked", "{outcome:?}");
+        assert!(
+            !request.output_dir.join("questions.json").exists(),
+            "an over-budget ask must not write questions.json"
+        );
     }
 }

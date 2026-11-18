@@ -389,7 +389,7 @@ runner 解析四行后，生成 `receipts/<task_id>.json`（实现写入 `.loom/
 |---|---|---|
 | `done` | worker 认为完成，已跑 verify | 独立重跑 verify；通过才 `passed` |
 | `blocked` | 环境/依赖/权限阻塞 | 查锁/环境；可重派或转人工 |
-| `needs_input` | 规格不清/需要额外引用 | 补 spec 或追加 `inputs`，重派 |
+| `needs_input` | 规格不清/需要额外引用 | adapter 已写 `outbox/questions.json`（见 `doc/15` §2.4）：用 `loom answer` 回答，它发 `task.answered` 并把任务送回 `ready`，然后重派；更早的提问若无 questions 文件，则补 spec 或追加 `inputs` 后重派 |
 | `failed` | 主动放弃/无法完成 | 同层重试一次 → 升级 |
 | `budget_exceeded` | 超预算中止 | 不自动重试；拆小或人工 |
 
@@ -671,7 +671,8 @@ runner 为每条 acceptance 记录：
 | `task.fallback` | `from`, `to`, `tier`, `reason`, `exit`, `timed_out`, `switch` |
 | `task.merged` | `merge_sha`, `integration_verify` |
 | `task.blocked` | `code`, `lock_owner`（可选 `lock_run`/`lock_path`/`detail`；`code=parallel_cap` 时为 `running`/`max_running`） |
-| `task.needs_input` | `code`（`needs_input`）, `verify_ids`；表示 adapter 在等人工回答，不是失败 |
+| `task.needs_input` | `code`（`needs_input`）, `verify_ids`, `question_ids`, `scopes`, `blocking`；表示 adapter 在等人工回答，不是失败 |
+| `task.answered` | `question_ids`, `by`（`human`/`judgment`/`policy`/`spec`）, `source`, `assumption_ids`；仅当无 blocking 问题悬而未决时把 `needs_input → ready` |
 | `budget.warning` | `used`, `limit` |
 | `budget.exceeded` | `used`, `limit`, `scope` |
 | `human.approved` | `by`, `scope` |
@@ -684,7 +685,7 @@ runner 为每条 acceptance 记录：
 - 事件写入失败不阻塞主流程，但必须告警。
 - 每个事件有 `run_id`；跨 run 的任务用 `parent_run_id`。
 - 敏感字段脱敏后再写。
-- 任务状态由事件重放得出（`loom-core::status_after_event`）：`task.created→pending`、`task.ready→ready`、`task.dispatched→dispatched`、`task.started→running`、`task.receipt→receipt`、`task.passed→passed`、`task.failed→failed`、`task.blocked→blocked`、`task.needs_input→needs_input`、`task.escalated→escalated`、`task.merged→merged`、`human.aborted→cancelled`；`task.verify` / `task.verdict` / `task.fallback` / 预算事件不改状态。`needs_input` / `blocked` 不是失败：它们可被再次 dispatch，且**不计入** M3 的 `task.failed` 升级计数；只有验收失败或 adapter 明确失败才写 `task.failed`。`tasks.json` 只是这个重放结果的视图。
+- 任务状态由事件重放得出（`loom-core::status_after_event`）：`task.created→pending`、`task.ready→ready`、`task.dispatched→dispatched`、`task.started→running`、`task.receipt→receipt`、`task.passed→passed`、`task.failed→failed`、`task.blocked→blocked`、`task.needs_input→needs_input`、`task.escalated→escalated`、`task.merged→merged`、`human.aborted→cancelled`；`task.verify` / `task.verdict` / `task.fallback` / 预算事件不改状态；`task.answered` 只从 `needs_input` 改状态（变为 `ready`），绝不会把更晚的状态往回拉。`needs_input` / `blocked` 不是失败：它们可被再次 dispatch，且**不计入** M3 的 `task.failed` 升级计数；只有验收失败或 adapter 明确失败才写 `task.failed`。`tasks.json` 只是这个重放结果的视图。
 - `task.fallback` 表示**同层换模型重跑**：`run_id` 是新 attempt 的 run，`parent_run_id` 指向失败的 run；`attempt` 不变，所以升级阈值（数 `task.failed`）不会被切换污染。跨层换模型只由升级触发，不由 fallback 触发。
 - 依赖只在 `passed` / `merged` 后视为满足；循环依赖与跨 goal 依赖在写入索引时拒绝。
 

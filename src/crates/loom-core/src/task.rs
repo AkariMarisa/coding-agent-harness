@@ -148,6 +148,8 @@ pub fn status_after_event(current: TaskStatus, event: EventType) -> TaskStatus {
         EventType::TaskEscalated => TaskStatus::Escalated,
         EventType::TaskMerged => TaskStatus::Merged,
         EventType::HumanAborted => TaskStatus::Cancelled,
+        EventType::TaskAnswered if current == TaskStatus::NeedsInput => TaskStatus::Ready,
+        EventType::TaskAnswered => current,
         EventType::RunStarted
         | EventType::GoalLoaded
         | EventType::TaskVerify

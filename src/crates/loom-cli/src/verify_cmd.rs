@@ -385,16 +385,51 @@ pub(crate) fn run_verify(
                         .collect::<Vec<_>>()),
                 )]),
         )?,
-        ReceiptStatus::NeedsInput => append_event(
-            project,
-            &loom_core::Event::new(&run.id, now_ms(), EventType::TaskNeedsInput)
-                .task(task_id)
-                .attempt(attempt)
-                .data([
-                    ("code".to_string(), json!("needs_input")),
-                    ("verify_ids".to_string(), verify_ids),
-                ]),
-        )?,
+        ReceiptStatus::NeedsInput => {
+            // Enrich with the Q&A on disk so consumers (inbox, replay) see
+            // what is being waited on without re-reading questions.json.
+            let questions: loom_core::QuestionsFile =
+                std::fs::read_to_string(run.outbox_dir().join("questions.json"))
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<loom_core::QuestionsFile>(&text).ok())
+                    .filter(|file| file.task_id == task_id)
+                    .unwrap_or(loom_core::QuestionsFile {
+                        v: loom_core::QUESTIONS_VERSION,
+                        task_id: task_id.to_string(),
+                        run_id: run.id.clone(),
+                        questions: Vec::new(),
+                    });
+            append_event(
+                project,
+                &loom_core::Event::new(&run.id, now_ms(), EventType::TaskNeedsInput)
+                    .task(task_id)
+                    .attempt(attempt)
+                    .data([
+                        ("code".to_string(), json!("needs_input")),
+                        ("verify_ids".to_string(), verify_ids),
+                        (
+                            "question_ids".to_string(),
+                            json!(questions
+                                .questions
+                                .iter()
+                                .map(|question| question.id.clone())
+                                .collect::<Vec<_>>()),
+                        ),
+                        (
+                            "scopes".to_string(),
+                            json!(questions
+                                .questions
+                                .iter()
+                                .map(|question| question.scope.as_str())
+                                .collect::<Vec<_>>()),
+                        ),
+                        (
+                            "blocking".to_string(),
+                            json!(questions.questions.iter().any(|question| question.blocking)),
+                        ),
+                    ]),
+            )?
+        }
         ReceiptStatus::Blocked | ReceiptStatus::BudgetExceeded => append_event(
             project,
             &loom_core::Event::new(&run.id, now_ms(), EventType::TaskBlocked)

@@ -7,6 +7,7 @@ mod config;
 mod envelope;
 mod event;
 mod limits;
+mod questions;
 mod receipt;
 mod routing;
 mod task;
@@ -25,6 +26,10 @@ pub use envelope::{
 };
 pub use event::{Event, EventFilter, EventType, EVENT_VERSION};
 pub use limits::Limits;
+pub use questions::{
+    Answer, AnswersFile, Question, QuestionOption, QuestionScope, QuestionsFile, ANSWERS_VERSION,
+    QUESTIONS_VERSION,
+};
 pub use receipt::{
     parse_four_line, ArtifactEvidence, Decision, Diffstat, FourLineReceipt, Receipt, ReceiptStatus,
     TokenTotals, VerifyClaim, VerifyEvidence, VerifyResult, RECEIPT_VERSION,

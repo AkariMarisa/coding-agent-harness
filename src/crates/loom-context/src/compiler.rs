@@ -94,6 +94,23 @@ pub struct FailedAcceptance {
     pub log_path: String,
 }
 
+/// A question carried into the next packet, with the answer if one landed
+/// (`doc/15` §2.6: the packet shows what was asked and what is still owed).
+#[derive(Debug, Clone)]
+pub struct PackQuestion {
+    pub id: String,
+    pub question: String,
+    pub blocking: bool,
+    pub scope: String,
+    /// `(option id, label)` pairs, so a pending question can be re-asked or
+    /// resolved on its default without reading questions.json again.
+    pub options: Vec<(String, String)>,
+    pub default: Option<String>,
+    /// The choice recorded by `loom answer`, `None` while still pending.
+    pub answer: Option<String>,
+    pub rationale: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FailurePack {
     pub attempt: u32,
@@ -101,6 +118,7 @@ pub struct FailurePack {
     pub log_excerpt: String,
     pub diff_ref: Option<String>,
     pub evidence_paths: Vec<String>,
+    pub questions: Vec<PackQuestion>,
 }
 
 pub struct CompileRequest<'a> {
@@ -745,6 +763,42 @@ fn render_failure(pack: &FailurePack) -> String {
             text.push_str(&format!("- {path}\n"));
         }
     }
+    if !pack.questions.is_empty() {
+        text.push_str("\n## questions\n");
+        for question in &pack.questions {
+            text.push_str(&format!(
+                "- {} [{}] {} ({})\n",
+                question.id,
+                if question.blocking {
+                    "blocking"
+                } else {
+                    "optional"
+                },
+                question.question.trim(),
+                question.scope,
+            ));
+            let state = match (&question.answer, &question.rationale) {
+                (Some(choice), Some(rationale)) => format!("answered: {choice} — {rationale}"),
+                (Some(choice), None) => format!("answered: {choice}"),
+                (None, _) => "PENDING".to_string(),
+            };
+            text.push_str(&format!("    {state}\n"));
+            if question.answer.is_none() && !question.options.is_empty() {
+                let options = question
+                    .options
+                    .iter()
+                    .map(|(id, label)| format!("{id}={label}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let default = question
+                    .default
+                    .as_deref()
+                    .map(|default| format!("; default: {default}"))
+                    .unwrap_or_default();
+                text.push_str(&format!("    options: {options}{default}\n"));
+            }
+        }
+    }
     text
 }
 
@@ -969,11 +1023,73 @@ mod tests {
             log_excerpt: "error: assertion failed".into(),
             diff_ref: None,
             evidence_paths: vec![".loom/logs/verify.log".into()],
+            questions: vec![],
         };
         request.failure_pack = Some(&failure);
         let compiled = compile(&request).expect("compile");
         assert!(compiled.packet.contains("failure pack"));
         assert!(compiled.packet.contains("assertion failed"));
+    }
+
+    #[test]
+    fn failure_pack_renders_questions_with_answers_and_pending_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project::at(dir.path());
+        let source = project.root.join("src");
+        fs::create_dir_all(&source).expect("mkdir");
+        fs::write(source.join("lib.rs"), "fn a() {}\n").expect("write");
+
+        let spec = task();
+        let mut request = request(&project, &spec);
+        let failure = FailurePack {
+            attempt: 1,
+            failures: Vec::new(),
+            log_excerpt: String::new(),
+            diff_ref: None,
+            evidence_paths: Vec::new(),
+            questions: vec![
+                PackQuestion {
+                    id: "Q1".into(),
+                    question: "Stay compatible with the old schema?".into(),
+                    blocking: true,
+                    scope: "design".into(),
+                    options: vec![
+                        ("A".into(), "dual-write one version".into()),
+                        ("B".into(), "new schema only".into()),
+                    ],
+                    default: Some("A".into()),
+                    answer: Some("A".into()),
+                    rationale: Some("keep the rollback path".into()),
+                },
+                PackQuestion {
+                    id: "Q2".into(),
+                    question: "Widen the allowed paths?".into(),
+                    blocking: false,
+                    scope: "scope".into(),
+                    options: vec![("A".into(), "keep as is".into())],
+                    default: Some("A".into()),
+                    answer: None,
+                    rationale: None,
+                },
+            ],
+        };
+        request.failure_pack = Some(&failure);
+        let compiled = compile(&request).expect("compile");
+        assert!(compiled.packet.contains("## questions"));
+        assert!(compiled.packet.contains("Q1 [blocking]"));
+        assert!(compiled
+            .packet
+            .contains("answered: A — keep the rollback path"));
+        assert!(compiled.packet.contains("Q2 [optional]"));
+        assert!(compiled.packet.contains("PENDING"));
+        // A pending question shows its options and default so the next run
+        // can re-ask or proceed without re-reading questions.json.
+        assert!(compiled
+            .packet
+            .contains("options: A=keep as is; default: A"));
+        assert!(!compiled.packet.contains("options: A=dual-write"));
+        // No acceptance line is rendered: the empty-pack placeholder is not a failure.
+        assert!(!compiled.packet.contains("exit="));
     }
 
     #[test]

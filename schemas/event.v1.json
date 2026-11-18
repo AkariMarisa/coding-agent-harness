@@ -28,6 +28,7 @@
         "task.merged",
         "task.blocked",
         "task.needs_input",
+        "task.answered",
         "budget.warning",
         "budget.exceeded",
         "human.approved",

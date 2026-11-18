@@ -9,6 +9,7 @@ mod prompt;
 
 pub use compiler::{
     compile, CompileRequest, CompiledContext, ContextBudget, ContextKind, ContextManifest,
-    ContextSection, FailedAcceptance, FailurePack, InputHash, SectionContent, CONTEXT_VERSION,
+    ContextSection, FailedAcceptance, FailurePack, InputHash, PackQuestion, SectionContent,
+    CONTEXT_VERSION,
 };
 pub use prompt::{get, list, PromptRole, PromptTemplate, PROMPT_VERSION};

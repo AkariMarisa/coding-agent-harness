@@ -389,7 +389,7 @@ After parsing the four lines, the runner generates `receipts/<task_id>.json` (th
 |---|---|---|
 | `done` | The worker believes it is finished; verify has been run | Rerun verify independently; only then `passed` |
 | `blocked` | Blocked by environment/dependencies/permissions | Check locks/environment; may redispatch or hand to human |
-| `needs_input` | Spec unclear/additional references needed | Supplement the spec or append `inputs`, then redispatch |
+| `needs_input` | Spec unclear/additional references needed | The adapter wrote `outbox/questions.json` (see `doc/15` §2.4): answer with `loom answer`, which emits `task.answered` and returns the task to `ready`; then redispatch. Older asks without a questions file: supplement the spec or append `inputs`, then redispatch |
 | `failed` | Gave up / cannot complete | Retry once in the same tier → escalate |
 | `budget_exceeded` | Aborted after exceeding the budget | No automatic retry; split smaller or hand to human |
 
@@ -671,7 +671,8 @@ Escalation is allowed only in the following situations:
 | `task.fallback` | `from`, `to`, `tier`, `reason`, `exit`, `timed_out`, `switch` |
 | `task.merged` | `merge_sha`, `integration_verify` |
 | `task.blocked` | `code`, `lock_owner` (optional `lock_run`/`lock_path`/`detail`; when `code=parallel_cap` it is `running`/`max_running`) |
-| `task.needs_input` | `code` (`needs_input`), `verify_ids`; means the adapter is waiting for a human answer, not a failure |
+| `task.needs_input` | `code` (`needs_input`), `verify_ids`, `question_ids`, `scopes`, `blocking`; means the adapter is waiting for a human answer, not a failure |
+| `task.answered` | `question_ids`, `by` (`human`/`judgment`/`policy`/`spec`), `source`, `assumption_ids`; moves `needs_input → ready` only when no blocking question stays open |
 | `budget.warning` | `used`, `limit` |
 | `budget.exceeded` | `used`, `limit`, `scope` |
 | `human.approved` | `by`, `scope` |
@@ -684,7 +685,7 @@ Escalation is allowed only in the following situations:
 - A failed event write does not block the main flow, but it must raise an alert.
 - Every event has a `run_id`; tasks spanning runs use `parent_run_id`.
 - Sensitive fields are redacted before writing.
-- Task state is derived by replaying events (`loom-core::status_after_event`): `task.created→pending`, `task.ready→ready`, `task.dispatched→dispatched`, `task.started→running`, `task.receipt→receipt`, `task.passed→passed`, `task.failed→failed`, `task.blocked→blocked`, `task.needs_input→needs_input`, `task.escalated→escalated`, `task.merged→merged`, `human.aborted→cancelled`; `task.verify` / `task.verdict` / `task.fallback` / budget events do not change state. `needs_input` / `blocked` are not failures: they can be dispatched again, and they **do not count** toward M3's `task.failed` escalation count; only an acceptance failure or an explicit adapter failure writes `task.failed`. `tasks.json` is just a view of this replay result.
+- Task state is derived by replaying events (`loom-core::status_after_event`): `task.created→pending`, `task.ready→ready`, `task.dispatched→dispatched`, `task.started→running`, `task.receipt→receipt`, `task.passed→passed`, `task.failed→failed`, `task.blocked→blocked`, `task.needs_input→needs_input`, `task.escalated→escalated`, `task.merged→merged`, `human.aborted→cancelled`; `task.verify` / `task.verdict` / `task.fallback` / budget events do not change state; `task.answered` changes it only from `needs_input` (to `ready`), never backwards from a later state. `needs_input` / `blocked` are not failures: they can be dispatched again, and they **do not count** toward M3's `task.failed` escalation count; only an acceptance failure or an explicit adapter failure writes `task.failed`. `tasks.json` is just a view of this replay result.
 - `task.fallback` means a **same-tier model switch and rerun**: the `run_id` is the run of the new attempt, and `parent_run_id` points to the failed run; `attempt` does not change, so the escalation threshold (counting `task.failed`) is not polluted by the switch. Cross-tier model switches are triggered only by escalation, never by fallback.
 - Dependencies are considered satisfied only after `passed` / `merged`; circular dependencies and cross-goal dependencies are rejected when the index is written.
 

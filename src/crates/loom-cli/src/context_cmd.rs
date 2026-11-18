@@ -144,13 +144,71 @@ pub(crate) fn load_failure_pack(
     let log_excerpt =
         std::fs::read_to_string(run_dir.join("logs").join("verify.log")).unwrap_or_default();
 
+    // Q&A rides the same channel (`doc/15` §2.6): the questions the previous
+    // run asked, paired with whatever `loom answer` has recorded since.
+    let questions = load_questions(project, task_id, &run_dir);
+
     Ok(Some(Box::new(FailurePack {
         attempt: receipt.attempt,
         failures,
         log_excerpt,
         diff_ref: None,
         evidence_paths: vec![receipt.report_path.clone()],
+        questions,
     })))
+}
+
+/// Pair `outbox/questions.json` with `.loom/answers/<task>.json`.
+///
+/// A missing or unreadable file yields an empty list: a pack without Q&A is
+/// still a pack. Answers for questions that were never asked are ignored
+/// rather than fatal — the answers file is append-only across rounds.
+fn load_questions(
+    project: &loom_store::Project,
+    task_id: &str,
+    run_dir: &std::path::Path,
+) -> Vec<loom_context::PackQuestion> {
+    let text =
+        std::fs::read_to_string(run_dir.join("outbox").join("questions.json")).unwrap_or_default();
+    let parsed: Result<loom_core::QuestionsFile, _> = serde_json::from_str(&text);
+    let file = match parsed {
+        Ok(file) if file.task_id == task_id => file,
+        _ => return Vec::new(),
+    };
+
+    let answers_text = std::fs::read_to_string(
+        project
+            .loom_dir()
+            .join("answers")
+            .join(format!("{task_id}.json")),
+    )
+    .unwrap_or_default();
+    let answers: loom_core::AnswersFile = serde_json::from_str(&answers_text).unwrap_or_default();
+
+    let run_id = file.run_id.clone();
+    file.questions
+        .into_iter()
+        .map(|question| {
+            let answer = answers.choice_of(&question.id, &run_id).map(str::to_owned);
+            let rationale = answers
+                .rationale_of(&question.id, &run_id)
+                .map(str::to_owned);
+            loom_context::PackQuestion {
+                id: question.id,
+                question: question.question,
+                blocking: question.blocking,
+                scope: question.scope.as_str().to_string(),
+                options: question
+                    .options
+                    .into_iter()
+                    .map(|option| (option.id, option.label))
+                    .collect(),
+                default: question.default,
+                answer,
+                rationale,
+            }
+        })
+        .collect()
 }
 
 fn print_manifest(manifest: &ContextManifest, out_dir: &std::path::Path) {
@@ -273,6 +331,188 @@ mod tests {
             pack.evidence_paths,
             vec![".loom/runs/R-1/outbox/report.md".to_string()]
         );
+        // No questions.json in this fixture: the pack just has no Q&A.
+        assert!(pack.questions.is_empty());
+    }
+
+    fn write_questions(root: &std::path::Path, file: &loom_core::QuestionsFile) {
+        let outbox = root.join(".loom/runs/R-1/outbox");
+        fs::create_dir_all(&outbox).expect("create outbox");
+        fs::write(
+            outbox.join("questions.json"),
+            serde_json::to_string_pretty(file).expect("serialize questions"),
+        )
+        .expect("write questions");
+    }
+
+    fn write_answers(root: &std::path::Path, file: &loom_core::AnswersFile) {
+        let answers = root.join(".loom/answers");
+        fs::create_dir_all(&answers).expect("create answers");
+        fs::write(
+            answers.join(format!("{}.json", file.task_id)),
+            serde_json::to_string_pretty(file).expect("serialize answers"),
+        )
+        .expect("write answers");
+    }
+
+    fn sample_questions(task_id: &str) -> loom_core::QuestionsFile {
+        loom_core::QuestionsFile {
+            v: loom_core::QUESTIONS_VERSION,
+            task_id: task_id.to_string(),
+            run_id: "R-1".to_string(),
+            questions: vec![
+                loom_core::Question {
+                    id: "Q1".to_string(),
+                    question: "Stay compatible with the old schema?".to_string(),
+                    why_now: Some("the migration rewrites the users table".to_string()),
+                    blocking: true,
+                    scope: loom_core::QuestionScope::Design,
+                    options: vec![
+                        loom_core::QuestionOption {
+                            id: "A".to_string(),
+                            label: "dual-write one version".to_string(),
+                            consequence: Some("safe rollback".to_string()),
+                        },
+                        loom_core::QuestionOption {
+                            id: "B".to_string(),
+                            label: "new schema only".to_string(),
+                            consequence: Some("old clients break".to_string()),
+                        },
+                    ],
+                    recommended: Some("A".to_string()),
+                    default: Some("A".to_string()),
+                    reversible: false,
+                    evidence: vec!["src/db/migrate.rs:40-90".to_string()],
+                    ttl_s: Some(86_400),
+                },
+                loom_core::Question {
+                    id: "Q2".to_string(),
+                    question: "Widen the allowed paths?".to_string(),
+                    why_now: None,
+                    blocking: false,
+                    scope: loom_core::QuestionScope::Scope,
+                    options: vec![loom_core::QuestionOption {
+                        id: "A".to_string(),
+                        label: "keep as is".to_string(),
+                        consequence: None,
+                    }],
+                    recommended: None,
+                    default: Some("A".to_string()),
+                    reversible: true,
+                    evidence: Vec::new(),
+                    ttl_s: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn pairs_questions_with_answers_in_the_pack() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let project = Project::at(root);
+        write_receipt(root, &failed_receipt("T-1"));
+        write_questions(root, &sample_questions("T-1"));
+        write_answers(
+            root,
+            &loom_core::AnswersFile {
+                v: loom_core::ANSWERS_VERSION,
+                task_id: "T-1".to_string(),
+                answers: vec![
+                    loom_core::Answer {
+                        question_id: "Q1".to_string(),
+                        run_id: "R-1".to_string(),
+                        choice: "A".to_string(),
+                        by: "human".to_string(),
+                        rationale: Some("keep the rollback path".to_string()),
+                        assumption_id: None,
+                    },
+                    // An older round's answer to its own `Q1` must not pair
+                    // with this run's differently-worded `Q1`.
+                    loom_core::Answer {
+                        question_id: "Q1".to_string(),
+                        run_id: "R-0".to_string(),
+                        choice: "B".to_string(),
+                        by: "human".to_string(),
+                        rationale: Some("stale".to_string()),
+                        assumption_id: None,
+                    },
+                ],
+            },
+        );
+
+        let pack = load_failure_pack(&project, "T-1", "R-1")
+            .expect("load")
+            .expect("some pack");
+        assert_eq!(pack.questions.len(), 2);
+
+        let answered = &pack.questions[0];
+        assert_eq!(answered.id, "Q1");
+        assert!(answered.blocking);
+        assert_eq!(answered.scope, "design");
+        assert_eq!(answered.answer.as_deref(), Some("A"));
+        assert_eq!(
+            answered.rationale.as_deref(),
+            Some("keep the rollback path")
+        );
+
+        // An unanswered question stays visibly pending.
+        let pending = &pack.questions[1];
+        assert_eq!(pending.id, "Q2");
+        assert!(!pending.blocking);
+        assert_eq!(pending.answer, None);
+        assert_eq!(pending.rationale, None);
+    }
+
+    #[test]
+    fn ignores_foreign_or_malformed_questions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let project = Project::at(root);
+        write_receipt(root, &failed_receipt("T-1"));
+
+        // questions.json for a different task must not leak into this pack.
+        write_questions(root, &sample_questions("T-OTHER"));
+        let pack = load_failure_pack(&project, "T-1", "R-1")
+            .expect("load")
+            .expect("some pack");
+        assert!(pack.questions.is_empty());
+
+        // Malformed JSON degrades to "no Q&A", never to an error.
+        let outbox = root.join(".loom/runs/R-1/outbox");
+        fs::write(outbox.join("questions.json"), "{not json").expect("write");
+        let pack = load_failure_pack(&project, "T-1", "R-1")
+            .expect("load")
+            .expect("some pack");
+        assert!(pack.questions.is_empty());
+
+        // An answers file referencing an unknown question is tolerated: the
+        // pack iterates the questions that were asked, not the answers.
+        fs::remove_file(outbox.join("questions.json")).expect("remove");
+        write_questions(root, &sample_questions("T-1"));
+        write_answers(
+            root,
+            &loom_core::AnswersFile {
+                v: loom_core::ANSWERS_VERSION,
+                task_id: "T-1".to_string(),
+                answers: vec![loom_core::Answer {
+                    question_id: "Q9".to_string(),
+                    run_id: "R-1".to_string(),
+                    choice: "Z".to_string(),
+                    by: "human".to_string(),
+                    rationale: None,
+                    assumption_id: None,
+                }],
+            },
+        );
+        let pack = load_failure_pack(&project, "T-1", "R-1")
+            .expect("load")
+            .expect("some pack");
+        assert_eq!(pack.questions.len(), 2);
+        assert!(pack
+            .questions
+            .iter()
+            .all(|question| question.answer.is_none()));
     }
 
     #[test]
