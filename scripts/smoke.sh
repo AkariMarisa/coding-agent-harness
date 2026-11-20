@@ -228,6 +228,23 @@ if loom inbox --check > /dev/null 2>&1; then
     exit 1
 fi
 loom inbox --line | grep -q '^\[!\] 1 blocking'
+# The footer is a TTY-only stderr line (doc/15 §2.2): silent under a pipe,
+# and `loom status` shares the same view with counts + top titles.
+err=$(loom status 2>&1 >/dev/null)
+case "$err" in
+    *"[loom]"*)
+        echo "footer must stay off on non-TTY" >&2
+        exit 1
+        ;;
+esac
+loom status | grep -q 'inbox:' || {
+    echo "expected loom status to share the inbox view" >&2
+    exit 1
+}
+loom status | grep -q '\[blocking\]' || {
+    echo "expected loom status to show the top item title" >&2
+    exit 1
+}
 
 # `loom top` is a read-only watcher (doc/15 §12.1): the needs_input task is
 # in flight until answered, and JSON always prints exactly one snapshot.

@@ -10,7 +10,8 @@ use anyhow::{bail, Result};
 use loom_core::{
     parse_rfc3339_ms, rfc3339_ms, AttentionChanges, AttentionKind, InboxFile, ItemStatus,
 };
-use loom_store::{now_ms, resolve_item, sync_inbox, update_item, Project};
+use loom_store::{now_ms, read_inbox_lenient, resolve_item, sync_inbox, update_item, Project};
+use std::io::{IsTerminal, Write as _};
 
 use super::{Format, InboxCommand};
 
@@ -312,6 +313,94 @@ impl ItemView for loom_core::AttentionItem {
     }
 }
 
+/// The stderr footer of every human command (`doc/15` §2.2 outlets).
+///
+/// Read-only: it serves the view as-is and replays nothing — writers keep the
+/// view in step (`doc/16`: the corner must not full-replay per command).
+/// Never writes to stdout, so `--format json` pipelines stay clean.
+pub fn emit_footer(project: &Project, is_inbox: bool) {
+    // `loom inbox` (and its --line/--check) is the corner itself.
+    if is_inbox {
+        return;
+    }
+    let config = project.load_config().unwrap_or_default();
+    let no_inbox = std::env::var("LOOM_NO_INBOX")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !footer_enabled(
+        &config.attention.footer,
+        no_inbox,
+        std::io::stderr().is_terminal(),
+    ) {
+        return;
+    }
+    let view = read_inbox_lenient(project);
+    if let Some(line) = footer_line(&view) {
+        let _ = writeln!(std::io::stderr(), "{line}");
+    }
+}
+
+/// Pure gate so the TTY logic is testable without a terminal.
+pub fn footer_enabled(footer_mode: &str, no_inbox_env: bool, stderr_is_tty: bool) -> bool {
+    if no_inbox_env {
+        return false;
+    }
+    match footer_mode {
+        "off" => false,
+        "always" => true,
+        // "tty" — anything unknown is rejected by config validation; treat it
+        // conservatively as tty-only.
+        _ => stderr_is_tty,
+    }
+}
+
+/// `[loom] 1 blocked · 2 pending → loom inbox`; silent when nothing is due
+/// (an `info` item is not a todo and never nags).
+pub fn footer_line(view: &InboxFile) -> Option<String> {
+    if view.counts.blocking == 0 && view.counts.soon == 0 {
+        return None;
+    }
+    Some(format!(
+        "[loom] {} blocked · {} pending → loom inbox",
+        view.counts.blocking, view.counts.soon
+    ))
+}
+
+/// `loom status` share of the same view: counts plus the top 3 titles.
+pub fn status_lines(view: &InboxFile) -> Vec<String> {
+    if view.counts.blocking == 0 && view.counts.soon == 0 && view.counts.info == 0 {
+        return vec!["empty".to_string()];
+    }
+    let now = parse_rfc3339_ms(&view.generated_at).unwrap_or(0);
+    let mut lines = vec![format!(
+        "{} blocking · {} pending · {} info",
+        view.counts.blocking, view.counts.soon, view.counts.info
+    )];
+    for item in view
+        .items
+        .iter()
+        .filter(|item| item.is_pending(now))
+        .take(3)
+    {
+        lines.push(format!(
+            "  [{}] {}",
+            severity_str(item.severity),
+            short_title(&item.title)
+        ));
+    }
+    lines
+}
+
+fn short_title(title: &str) -> String {
+    let limit = 80;
+    if title.chars().count() <= limit {
+        return title.to_string();
+    }
+    let mut out: String = title.chars().take(limit.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,5 +690,75 @@ mod tests {
         let code = inbox(&project, None, InboxOpts::default(), Format::Json).expect("read");
         assert_eq!(code, 0);
         assert!(!project.loom_dir().exists(), "a reader creates nothing");
+    }
+
+    fn empty_view() -> InboxFile {
+        InboxFile {
+            v: loom_core::INBOX_VERSION,
+            generated_at: rfc3339_ms(0),
+            counts: Default::default(),
+            items: Vec::new(),
+            source: None,
+        }
+    }
+
+    #[test]
+    fn footer_gates_on_config_env_and_tty() {
+        assert!(footer_enabled("tty", false, true));
+        assert!(
+            !footer_enabled("tty", false, false),
+            "tty mode needs a terminal"
+        );
+        assert!(footer_enabled("always", false, false));
+        assert!(
+            !footer_enabled("always", true, false),
+            "env wins over always"
+        );
+        assert!(!footer_enabled("off", false, true));
+        assert!(!footer_enabled("tty", true, true), "LOOM_NO_INBOX wins");
+    }
+
+    #[test]
+    fn footer_line_only_speaks_when_due() {
+        assert!(
+            footer_line(&empty_view()).is_none(),
+            "quiet when nothing is due"
+        );
+
+        let view = InboxFile {
+            counts: loom_core::InboxCounts {
+                blocking: 1,
+                soon: 2,
+                info: 0,
+            },
+            ..empty_view()
+        };
+        assert_eq!(
+            footer_line(&view).expect("due"),
+            "[loom] 1 blocked · 2 pending → loom inbox"
+        );
+
+        let info_only = InboxFile {
+            counts: loom_core::InboxCounts {
+                blocking: 0,
+                soon: 0,
+                info: 3,
+            },
+            ..empty_view()
+        };
+        assert!(footer_line(&info_only).is_none(), "info never nags");
+    }
+
+    #[test]
+    fn status_block_shows_counts_and_top_titles() {
+        let (_dir, project) = fixture();
+        let view = sync_inbox(&project).expect("sync");
+        let lines = status_lines(&view);
+        assert_eq!(lines[0], "1 blocking · 1 pending · 0 info");
+        assert_eq!(lines.len(), 3, "counts + two titles");
+        assert!(lines[1].starts_with("  [blocking] "), "sorted, top first");
+        assert!(lines[2].starts_with("  [soon] "));
+
+        assert_eq!(status_lines(&empty_view()), vec!["empty".to_string()]);
     }
 }

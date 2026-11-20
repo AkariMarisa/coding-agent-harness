@@ -588,8 +588,11 @@ fn run(cli: Cli) -> Result<i32> {
         None => std::env::current_dir().context("cannot read current directory")?,
     };
     let project = Project::at(root);
+    // Captured before the match consumes `cli.command`: the inbox command
+    // (and its --line/--check) is the corner itself, never its own footer.
+    let is_inbox = matches!(&cli.command, Command::Inbox { .. });
 
-    match cli.command {
+    let code = match cli.command {
         Command::Init { force } => {
             let report = project.init(force)?;
             println!("initialized {}", project.loom_dir().display());
@@ -838,7 +841,12 @@ fn run(cli: Cli) -> Result<i32> {
                 cli.format,
             )
         }
-    }
+    };
+
+    // doc/15 §2.2 fixed corner: one stderr line when something is due —
+    // never on stdout, never for non-TTY/CI, off via LOOM_NO_INBOX=1.
+    inbox_cmd::emit_footer(&project, is_inbox);
+    code
 }
 
 fn capability(project: &Project, command: CapabilityCommand, format: Format) -> Result<i32> {
@@ -1802,6 +1810,13 @@ fn status(project: &Project) -> Result<i32> {
     println!("runs:    {}", count_entries(&loom.join("runs"), true));
     println!("tasks:   {}", count_entries(&loom.join("tasks"), false));
     println!("models:  {}", config.models.len());
+    // Same view as the footer (doc/15 §2.2): counts plus the top 3 titles.
+    let inbox = loom_store::read_inbox_lenient(project);
+    let lines = inbox_cmd::status_lines(&inbox);
+    println!("inbox:   {}", lines[0]);
+    for line in lines.iter().skip(1) {
+        println!("{line}");
+    }
     match read_usage(project) {
         Ok(records) => println!("ledger:  {} requests", records.len()),
         Err(error) => println!("ledger:  unreadable ({error:#})"),
