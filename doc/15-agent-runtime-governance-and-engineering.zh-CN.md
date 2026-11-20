@@ -1267,7 +1267,7 @@ agent 会重查几步前已经查到的事实——第 3 步答过的 `node --ve
 
 ## 12. 观测与声明式分派（来自其他工具的笔记）
 
-> 状态：**方向记录；§12.1 已实施（2026-11-20），其余未排期**（记录于 2026-11-15，来自使用其他工具——OpenCode、Codex CLI 的四条体验，映射到 Loom 架构上）。§12.1 已落地为 `loom top`；§12.2 喂给 `questions.json` 协议（2026-11-18 已落地，见 §2.4），§12.3 喂给 §3（skills，仍待实现）。
+> 状态：**方向记录；§12.1 与 §12.3 已落地，其余未排期**（记录于 2026-11-15，来自使用其他工具——OpenCode、Codex CLI 的四条体验，映射到 Loom 架构上）。§12.1 已落地为 `loom top`（2026-11-20）；§12.3 已落地为 `TaskSpec.skills` 声明链路（2026-11-20——注入、manifest、回执；§3 周边的 skills 扫描/晋级仍待做）；§12.2 喂给 `questions.json` 协议（2026-11-18 已落地，见 §2.4）。
 
 ### 12.1 用户可见的子代理进度
 
@@ -1306,6 +1306,8 @@ agent 会重查几步前已经查到的事实——第 3 步答过的 `node --ve
 诚实的取舍：steer token 上最省但意图易漂（还可能作废在飞的生成）；queue 在飞零浪费但到达太晚，纠正不了进行中的工作——它只是为下一轮备料；rebuild 是最贵的路径、意图最干净。Loom 选 rebuild 是因为这里重建便宜，不是因为它免费。让这条路好走的 `questions.json` + 回答注入仍在待实现清单；本节主张在 judgment gate 之后优先做它。
 
 ### 12.3 skill：按声明分派，不按发现分派
+
+> **实现状态（2026-11-20，声明链路已落地）**：`TaskSpec.skills: [id]` 端到端实现——上下文编译器把每个 `<project>/.opencode/skills/<id>/SKILL.md` 正文注入 `skills` packet 段，紧跟 task 段之后（独立预算行：main/worker 4k、judgment 2k；skill **缺失或超预算时编译直接失败**，绝不发半个 skill）；reference 文件只列路径、不内联；context manifest 记录注入的 id（注入记录），`loom verify` 把它抄到 `receipt.skills`，opencode preset 则在 stdin 追加 `@skill-id` mention——最后一跳已实现但**未经验证**，要等 opencode canary 跑通（doc/14 阻塞项）。下列规则成立；仍待做的全在 §3 周边：skills 扫描/按需发现与验证后的晋级。
 
 Loom 已经有正确样本：`default_prompt_role` 在代码里按 `TaskSpec.role` 确定性地映射 prompt。子代理悄悄没拿到 skill（在 Codex CLI 上观察到）正是把指令分派交给模型发现时会发生的事。
 

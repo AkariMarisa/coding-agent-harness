@@ -1268,7 +1268,7 @@ Target: not zero re-queries — **immutable facts without re-queries, volatile f
 
 ## 12. Observability and declarative dispatch (notes from other tools)
 
-> Status: **direction record; §12.1 implemented (2026-11-20), the rest not scheduled** (recorded 2026-11-15 from using other tools — OpenCode, Codex CLI: four experiences mapped onto Loom's architecture). §12.1 landed as `loom top`; §12.2 feeds the `questions.json` protocol (landed 2026-11-18, see §2.4) and §12.3 feeds §3 (skills, still pending).
+> Status: **direction record; §12.1 and §12.3 landed, the rest not scheduled** (recorded 2026-11-15 from using other tools — OpenCode, Codex CLI: four experiences mapped onto Loom's architecture). §12.1 landed as `loom top` (2026-11-20); §12.3 landed as the `TaskSpec.skills` declaration path (2026-11-20 — injection, manifest, receipt; skills scan/promotion under §3 still pending); §12.2 feeds the `questions.json` protocol (landed 2026-11-18, see §2.4).
 
 ### 12.1 User-visible sub-agent progress
 
@@ -1307,6 +1307,8 @@ Design rule: **treat question timing as a cost parameter**. Worker prompts shoul
 Honest tradeoffs: steer is the cheapest in tokens but risks intent drift (and may discard an in-flight generation); queue wastes nothing in flight but arrives too late to correct work in progress — it prepares the next round instead; rebuild is the most expensive path with the cleanest intent. Loom chose rebuild because rebuilding is cheap here, not because it is free. The ergonomic path — `questions.json` plus answer injection — remains on the pending list; this section argues for prioritizing it after the judgment gate.
 
 ### 12.3 Skills: dispatch by declaration, not by discovery
+
+> **Implementation status (2026-11-20, declaration path landed)**: `TaskSpec.skills: [id]` is implemented end to end — the context compiler injects each `<project>/.opencode/skills/<id>/SKILL.md` body into a `skills` packet section right after the task (own budget line: main/worker 4k, judgment 2k; a missing or oversized skill **fails the compile**, never ships a half-skill); reference files are listed by path, never inlined; the context manifest records the injected ids (the injection record), `loom verify` copies them onto `receipt.skills`, and the opencode preset appends `@skill-id` mentions on stdin — that last hop is implemented but **unverified** until the opencode canary runs (doc/14 blocker). The rules below stand; what is still pending is everything around §3: skills scan/on-demand discovery and promotion after validation.
 
 Loom already ships the correct precedent: `default_prompt_role` maps `TaskSpec.role` to a prompt deterministically in code. A sub-agent that silently misses its skill (observed on Codex CLI) is what happens when instruction dispatch is left to model discovery.
 

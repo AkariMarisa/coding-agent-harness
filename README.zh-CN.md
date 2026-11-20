@@ -16,7 +16,7 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
 | 已实现 | `loom init/doctor/status`、`loom board`、`loom top`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom merge`、`loom resume`、`loom answer` |
 | 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实账单对账。详见 [doc/14-current-issues-and-blockers.zh-CN.md](doc/14-current-issues-and-blockers.zh-CN.md) |
-| 已设计未实现 | churn 治理余项（L1–L3 分级干预、成本感知重启；步骤级投影、patch-first/write 守卫、token 归因与 `loom churn stats` 已实现）、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-agent-runtime-governance-and-engineering.zh-CN.md](doc/15-agent-runtime-governance-and-engineering.zh-CN.md) |
+| 已设计未实现 | churn 治理余项（L1–L3 分级干预、成本感知重启；步骤级投影、patch-first/write 守卫、token 归因与 `loom churn stats` 已实现）、attention inbox（`questions.json` 协议已于 2026-11-18 落地）、skills 扫描/按需发现与晋级（`TaskSpec.skills` 声明链路已于 2026-11-20 落地）、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-agent-runtime-governance-and-engineering.zh-CN.md](doc/15-agent-runtime-governance-and-engineering.zh-CN.md) |
 
 ## 快速开始
 
