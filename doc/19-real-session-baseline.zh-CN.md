@@ -2,7 +2,7 @@
 
 > 语言：[English](19-real-session-baseline.md) | **简体中文**
 
-> **状态：实测记录（2026-11-19）。** 基线来自 `tumblr-downloader` 上一个**未经** Loom 的 10 天 OpenCode 会话；节省数字是由 Loom 已实测杠杆推导的算术投影，不是 Loom 的 A/B 实测。做该 A/B 的仪器仍缺失（见 [14](14-current-issues-and-blockers.zh-CN.md)）。
+> **状态：实测记录（2026-11-19）。** 基线来自 `tumblr-downloader` 上一个**未经** Loom 的 10 天 OpenCode 会话；节省数字是由 Loom 已实测杠杆推导的算术投影，不是 Loom 的 A/B 实测。做该 A/B 的仪器仍缺失（见 [14](14-current-issues-and-blockers.zh-CN.md)）。另一份不同 harness 的姊妹基线：[20](20-codex-session-baseline.zh-CN.md)（2026-11-20）。
 
 ## 1. 测了什么
 

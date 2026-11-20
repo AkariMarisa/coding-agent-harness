@@ -67,6 +67,7 @@
 | [17-workspace-dev-environment-isolation.zh-CN.md](17-workspace-dev-environment-isolation.zh-CN.md) | **方向记录（未设计）**：三平台按工作区隔离环境、A+B 无虚拟化、复用既有声明文件、容器降级为可选 profile；不做通用环境管理器 | 项目负责人/实现者 |
 | [18-agent-collaboration-workflow-proposal.zh-CN.md](18-agent-collaboration-workflow-proposal.zh-CN.md) | **方法提案（未实施）**：六十年流程史的存活原则、失效仪式清单、方向/批次/工作项三层节奏、人的四个介入点、新人六命令上手路径；配套 `loom plan` | 项目负责人/新人 |
 | [19-real-session-baseline.zh-CN.md](19-real-session-baseline.zh-CN.md) | **实测记录（2026-11-19）**：一个没有 Loom 的 10 天 OpenCode 会话——2,739 次调用烧掉 949M cache read、与规划逐条对照的工作流契合度、按证据等级拆解的 token 杠杆账本、反应式工作的入口缺口 | 项目负责人/实现者 |
+| [20-codex-session-baseline.zh-CN.md](20-codex-session-baseline.zh-CN.md) | **实测记录（2026-11-20）**：615 个没有 Loom 的 Codex CLI 会话——37k 次响应烧掉 6.98B 计费输入、工具输出主导的上下文与 envelope 算术、工作流契合度对照、格式计数陷阱、返工代理基线 | 项目负责人/实现者 |
 | [adr/README.zh-CN.md](adr/README.zh-CN.md) | **ADR 索引**：不可逆决策记录，含模型能力假设字段；格式、编号与 Supersede 规则 | 架构师/实现者 |
 | [`.opencode/skill-pilot/README.zh-CN.md`](../.opencode/skill-pilot/README.zh-CN.md) | **Skill 试点**：项目级 skill 清单、触发范围、固定 token 成本、来源与许可 | 实现者/维护者 |
 

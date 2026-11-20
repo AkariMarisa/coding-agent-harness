@@ -2,7 +2,7 @@
 
 > Language: **English** | [简体中文](19-real-session-baseline.zh-CN.md)
 
-> **Status: measurement record (2026-11-19).** Baseline from one 10-day OpenCode session on `tumblr-downloader` that ran **without** Loom; the savings figures are projections arithmetically derived from Loom's measured levers, not a Loom A/B run. The instrument for that A/B is still missing (see [14](14-current-issues-and-blockers.md)).
+> **Status: measurement record (2026-11-19).** Baseline from one 10-day OpenCode session on `tumblr-downloader` that ran **without** Loom; the savings figures are projections arithmetically derived from Loom's measured levers, not a Loom A/B run. The instrument for that A/B is still missing (see [14](14-current-issues-and-blockers.md)). Companion baseline on a different harness: [20](20-codex-session-baseline.md) (2026-11-20).
 
 ## 1. What was measured
 
