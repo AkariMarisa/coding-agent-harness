@@ -260,7 +260,7 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 ### 2.2 人工事项收件箱（attention inbox）
 
-> 状态：**已实现（2026-11-21）** —— `attention.*` 事件 + reducer（`loom-core/src/attention.rs`）、`.loom/inbox.json` 视图（`loom-store/src/inbox.rs`）、`loom inbox`（列表 / `--line` / `--check` / `--kind` / `--task` / `--all` / `--json` + `ack`/`defer`/`resolve`）、TTY stderr 页脚（`LOOM_NO_INBOX=1`、`[attention] footer`）、`[attention]` 配置节，以及 `task.needs_input` → `loom answer` 链路。尚未做：下方联动表中的 doctor/CI/升级/路由护栏来源、`include_in_packet = "counts"`、父子浮升规则、TUI 角落。
+> 状态：**已实现（2026-11-21）** —— `attention.*` 事件 + reducer（`loom-core/src/attention.rs`）、`.loom/inbox.json` 视图（`loom-store/src/inbox.rs`）、`loom inbox`（列表 / `--line` / `--check` / `--kind` / `--task` / `--all` / `--json` + `ack`/`defer`/`resolve`）、TTY stderr 页脚（`LOOM_NO_INBOX=1`、`[attention] footer`）、`[attention]` 配置节、`task.needs_input` → `loom answer` 链路，以及 doctor 联动（检查失败开 `doctor:<check>` 操作事项，检查通过自动 resolve）。尚未做：下方联动表中的 CI/升级/路由护栏来源、`include_in_packet = "counts"`、父子浮升规则、TUI 角落。
 
 目标：任何时候都能用一条命令回答“现在有什么需要我处理”，并且在 harness 的一个固定角落持续显示，而不是靠用户回翻对话。事项**不只包括问题**，还包括审批、操作、复核和提醒。
 
@@ -1212,7 +1212,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。
 - [x] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。（2026-11-20；事件 + `.loom/inbox.json` 视图——`loom inbox` 展示随 §2.2 命令落地。）
-- [ ] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。
+- [ ] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。（doctor 联动已做 2026-11-21，覆盖全部失败检查——FAIL 开 `doctor:<check>`、PASS 自动 resolve；`loom ci` 一半等 CI 核心。）
 - [x] 人类命令在 TTY 下 stderr 出现一行 footer；`--json` stdout 不含 footer；非 TTY/CI 不打印；`LOOM_NO_INBOX=1` 可关闭。（2026-11-21；`emit_footer`，由 `[attention] footer = tty|always|off` 控制。）
 - [x] `loom inbox` 同时显示问题与操作类事项；`loom inbox --check` 在存在 `blocking` 时退出 `2`；`ack` 不关闭事项，`defer` 只作用于 `soon/info`。（2026-11-21；所有 kind 均可渲染——`operation` 事项待下方 doctor/CI 来源接入后出现。）
 - [x] 脚本化 provider 调用 `ask` 工具 → `questions.json` → exit 2 → `loom answer` → 任务回到 `ready` 且下一个 packet 带上答案（2026-11-18；中间的 `loom inbox` 一环属已推迟的 §2.2 inbox）。

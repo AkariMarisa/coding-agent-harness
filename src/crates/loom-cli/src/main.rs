@@ -1565,8 +1565,12 @@ fn human_bytes(bytes: u64) -> String {
 
 fn doctor(project: &Project) -> Result<i32> {
     let mut healthy = true;
+    // (name, pass, detail) per check — feeds the doc/15 §2.2 item linkage
+    // after the last check, so the closure itself stays print-only.
+    let mut results: Vec<(String, bool, String)> = Vec::new();
     let mut check = |name: &str, pass: bool, detail: &str| {
         println!("[{}] {name:<12} {detail}", if pass { "ok" } else { "FAIL" });
+        results.push((name.to_string(), pass, detail.to_string()));
         if !pass {
             healthy = false;
         }
@@ -1783,7 +1787,58 @@ fn doctor(project: &Project) -> Result<i32> {
         }
     }
 
+    // doc/15 §2.2 linkage: a failing check becomes a resident operation item
+    // for a human; the same key resolves when the check passes again.
+    // Doctor stays advisory — a sync problem warns, it never fails diagnosis.
+    if let Err(error) = sync_doctor_items(project, &results) {
+        warn("inbox", &format!("attention sync failed: {error:#}"));
+    }
+
     Ok(if healthy { 0 } else { 1 })
+}
+
+/// Open `doctor:<check>` operation items for failed checks and resolve the
+/// same keys for checks that pass (auto-resolve when the condition clears).
+fn sync_doctor_items(project: &Project, results: &[(String, bool, String)]) -> Result<()> {
+    if !project.loom_dir().is_dir() {
+        // Nowhere to record: appending would create the very `.loom` whose
+        // absence the first check just reported.
+        return Ok(());
+    }
+    for (name, pass, detail) in results {
+        let dedupe_key = format!("doctor:{name}");
+        if *pass {
+            loom_store::resolve_by_key(
+                project,
+                "doctor",
+                &dedupe_key,
+                "doctor",
+                "condition cleared",
+            )?;
+        } else {
+            loom_store::open_item(
+                project,
+                &loom_store::NewItem {
+                    run_id: "doctor".to_string(),
+                    task_id: None,
+                    kind: loom_core::AttentionKind::Operation,
+                    source: loom_core::AttentionSource::Env,
+                    severity: loom_core::Severity::Blocking,
+                    dedupe_key,
+                    title: format!("doctor check failed: {name}"),
+                    detail: Some(detail.clone()),
+                    refs: Vec::new(),
+                    actions: vec![loom_core::AttentionAction {
+                        id: "doctor".to_string(),
+                        label: "Re-run doctor".to_string(),
+                        cmd: "loom doctor".to_string(),
+                    }],
+                },
+            )?;
+        }
+    }
+    loom_store::sync_inbox(project)?;
+    Ok(())
 }
 
 fn status(project: &Project) -> Result<i32> {

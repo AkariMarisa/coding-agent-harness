@@ -508,4 +508,27 @@ grep -q 'no parseable verdict' "$g3_receipt" || {
     echo "expected a verdict hint in the failed receipt" >&2; exit 1;
 }
 
+# doctor opens an operation item for a failing check and resolves the same
+# key once the condition clears (doc/15 §2.2 linkage). The review fixture
+# git-inits .smoke, so take the repo away to make the git check fail
+# deterministically, then give it back.
+mv /work/.smoke/.git /work/.smoke/.git.fixture
+loom doctor > /dev/null 2>&1 || true
+loom inbox --kind operation --format json | grep -q '"dedupe_key": "doctor:git"' || {
+    echo "expected doctor to open an operation item for the failing git check" >&2
+    exit 1
+}
+mv /work/.smoke/.git.fixture /work/.smoke/.git
+loom doctor > /dev/null 2>&1 || true
+if loom inbox --kind operation --format json | grep -q 'doctor:git'; then
+    echo "expected doctor:git to auto-resolve once the check passes" >&2
+    exit 1
+fi
+# The question item from the needs_input ring is still open: reading never
+# closes, and --check still gates on it.
+if loom inbox --check > /dev/null 2>&1; then
+    echo "expected the needs_input question item to keep --check at 2" >&2
+    exit 1
+fi
+
 echo "SMOKE_OK"

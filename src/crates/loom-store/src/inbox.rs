@@ -292,6 +292,27 @@ pub fn resolve_question_items(
     Ok(resolved)
 }
 
+/// Resolve the open item carrying `dedupe_key`, if any — the "condition
+/// cleared" path (`loom doctor` passing again, `doc/15` §2.2).
+pub fn resolve_by_key(
+    project: &Project,
+    run_id: &str,
+    dedupe_key: &str,
+    by: &str,
+    reason: &str,
+) -> Result<bool> {
+    let view = sync_inbox(project)?;
+    let Some(existing) = view
+        .items
+        .iter()
+        .find(|i| i.is_open() && i.dedupe_key == dedupe_key)
+    else {
+        return Ok(false);
+    };
+    let item_id = existing.id.clone();
+    resolve_item(project, run_id, &item_id, by, reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +476,37 @@ mod tests {
         assert!(!resolve_item(&project, "R-1", "ATT-none", "human", "x").expect("missing"));
         let inbox = sync_inbox(&project).expect("sync");
         assert_eq!(inbox.counts.soon, 0);
+    }
+
+    #[test]
+    fn resolve_by_key_matches_open_items_only() {
+        let (_dir, project) = project();
+        open_item(
+            &project,
+            &open("git missing", "doctor:git", Severity::Blocking),
+        )
+        .expect("open");
+        sync_inbox(&project).expect("sync");
+
+        assert!(resolve_by_key(
+            &project,
+            "doctor",
+            "doctor:git",
+            "doctor",
+            "condition cleared"
+        )
+        .expect("resolve"));
+        let inbox = sync_inbox(&project).expect("sync");
+        assert_eq!(inbox.counts.blocking, 0);
+        assert_eq!(inbox.items[0].status, loom_core::ItemStatus::Resolved);
+
+        assert!(
+            !resolve_by_key(&project, "doctor", "doctor:git", "doctor", "again").expect("closed"),
+            "already-closed keys resolve nothing"
+        );
+        assert!(
+            !resolve_by_key(&project, "doctor", "doctor:other", "doctor", "x").expect("absent"),
+            "absent keys resolve nothing"
+        );
     }
 }

@@ -261,7 +261,7 @@ Related implementation: `src/crates/loom-cli/src/verify_cmd.rs` (`claim_done` / 
 
 ### 2.2 Human-items inbox (attention inbox)
 
-> Status: **implemented (2026-11-21)** — `attention.*` events + reducer (`loom-core/src/attention.rs`), `.loom/inbox.json` view (`loom-store/src/inbox.rs`), `loom inbox` (list / `--line` / `--check` / `--kind` / `--task` / `--all` / `--json` + `ack`/`defer`/`resolve`), the TTY stderr footer (`LOOM_NO_INBOX=1`, `[attention] footer`), the `[attention]` config section, and the `task.needs_input` → `loom answer` linkage. Not yet: the doctor/CI/escalation/route-guard rows of the linkage table below, `include_in_packet = "counts"`, the parent/child float-up rules, and a TUI corner.
+> Status: **implemented (2026-11-21)** — `attention.*` events + reducer (`loom-core/src/attention.rs`), `.loom/inbox.json` view (`loom-store/src/inbox.rs`), `loom inbox` (list / `--line` / `--check` / `--kind` / `--task` / `--all` / `--json` + `ack`/`defer`/`resolve`), the TTY stderr footer (`LOOM_NO_INBOX=1`, `[attention] footer`), the `[attention]` config section, the `task.needs_input` → `loom answer` linkage, and the doctor linkage (a failed check opens a `doctor:<check>` operation item, a passing check resolves it). Not yet: the CI/escalation/route-guard rows of the linkage table below, `include_in_packet = "counts"`, the parent/child float-up rules, and a TUI corner.
 
 Goal: at any time, a single command answers "what needs my attention now", and it stays displayed in a fixed corner of the harness instead of relying on the user to scroll back through the conversation. Items **do not only include questions**, but also approvals, operations, reviews and reminders.
 
@@ -1213,7 +1213,7 @@ Notes:
 - [ ] The review job has token/time limits, is advisory by default, produces structured findings, and has no network; `kind=skill` can only load skills in the lock that passed static checks.
 - [ ] A `needs_input` receipt after `loom verify` has status `needs_input`, **produces no `task.failed`**, and does not raise the escalation count.
 - [x] `task.needs_input` automatically opens a `question` attention item; `loom answer` resolves it automatically (2026-11-20; events + `.loom/inbox.json` view — the `loom inbox` display lands with §2.2's command).
-- [ ] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears.
+- [ ] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears (doctor linkage done 2026-11-21 for all failing checks — FAIL opens `doctor:<check>`, PASS resolves it; the `loom ci` half waits for the CI core).
 - [x] On a TTY, human commands print one footer line on stderr; `--json` stdout contains no footer; nothing is printed for non-TTY/CI; `LOOM_NO_INBOX=1` turns it off (2026-11-21; `emit_footer`, gated by `[attention] footer = tty|always|off`).
 - [x] `loom inbox` shows both question and operation items; `loom inbox --check` exits `2` when any `blocking` exists; `ack` does not close an item, `defer` applies only to `soon/info` (2026-11-21; all kinds render — `operation` items appear once the doctor/CI sources below open them).
 - [x] A scripted provider calls the `ask` tool → `questions.json` → exit 2 → `loom answer` → the task returns to `ready` and the next packet carries the answer (2026-11-18; the `loom inbox` hop in the middle is the deferred §2.2 inbox).

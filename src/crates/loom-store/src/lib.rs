@@ -14,8 +14,8 @@ mod telemetry;
 pub use artifact::{read_artifact, write_artifact};
 pub use events::{append_event, events_path, read_events};
 pub use inbox::{
-    inbox_path, open_item, read_inbox, read_inbox_lenient, resolve_item, resolve_question_items,
-    sync_inbox, update_item, NewItem,
+    inbox_path, open_item, read_inbox, read_inbox_lenient, resolve_by_key, resolve_item,
+    resolve_question_items, sync_inbox, update_item, NewItem,
 };
 pub use ledger::{aggregate_usage, append_usage, ledger_path, read_usage};
 pub use locks::{
