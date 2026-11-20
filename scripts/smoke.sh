@@ -213,6 +213,17 @@ loom board --format json | grep -q '"T-20261106-004"' || {
     exit 1
 }
 
+# `loom top` is a read-only watcher (doc/15 §12.1): the needs_input task is
+# in flight until answered, and JSON always prints exactly one snapshot.
+loom top --format json | grep -q '"state": "needs_input"' || {
+    echo "expected loom top to show the needs_input run" >&2
+    exit 1
+}
+loom top --format pretty | grep -q '^loom top' || {
+    echo "expected loom top pretty header when piped" >&2
+    exit 1
+}
+
 # --- Review verdict gate (doc/03): parse → fail fast → block/allow merge ---
 # The scenario needs git (worktree mode + a committed report fixture); the
 # rest of this file stays in-place and is unaffected.
@@ -302,9 +313,25 @@ loom task add --file /work/.smoke/task-g2b.json > /dev/null
 
 # g1: implement (worktree mode so `loom merge` can reach the review gate).
 loom dispatch T-20261106-005 --adapter mock > /dev/null
+# Between dispatch and verify the task sits in `receipt`: top must show it as
+# awaiting verify, with the mock's usage row feeding step/tokens/latency.
+loom top --format json > /work/.smoke/top-receipt.json
+grep -q '"state": "receipt"' /work/.smoke/top-receipt.json || {
+    echo "expected loom top to show the awaiting-verify run" >&2; exit 1;
+}
+grep -q '"task_id": "T-20261106-005"' /work/.smoke/top-receipt.json || {
+    echo "expected loom top to name the dispatched task" >&2; exit 1;
+}
+grep -q '"input_tokens": 12000' /work/.smoke/top-receipt.json || {
+    echo "expected loom top to aggregate mock usage tokens" >&2; exit 1;
+}
 loom verify T-20261106-005 --format json | grep -q '"passed": true' || {
     echo "expected g1 to verify as passed" >&2; exit 1;
 }
+# Once passed the task leaves the in-flight view.
+if loom top --format json | grep -q '"task_id": "T-20261106-005"'; then
+    echo "loom top must not show a settled task" >&2; exit 1;
+fi
 
 # g2: review whose fixture report says request_changes → parsed into the receipt.
 # verify's stdout is a summary envelope; verdict/next_hint live in the receipt

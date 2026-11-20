@@ -10,7 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context as _, Result};
 use loom_core::{truncate_bytes, ModelCapability, TaskSpec};
@@ -262,6 +262,9 @@ pub fn run(
 
         steps += 1;
         toolbox.set_step(steps);
+        // Live marker for `loom top` (`doc/15` §12.1): without it a watcher
+        // only sees the last *completed* step and lags one step behind.
+        write_progress(request, steps, "model", &[]);
         let call_started = Instant::now();
         // Step-level projection: the stable prefix (system + packet) and the
         // most recent turns ship verbatim; old tool payloads ship as bounded
@@ -314,6 +317,7 @@ pub fn run(
             messages.push(message);
             let mut claim = Finish::done(summary);
             if config.run_acceptance {
+                write_progress(request, steps, "verify", &[]);
                 let acceptance =
                     run_acceptance(request, &spec, started.elapsed(), config.max_wall_s);
                 verify = acceptance.lines;
@@ -340,6 +344,17 @@ pub fn run(
         }
 
         messages.push(message);
+        // Phase marker: the model answered, its tool calls are about to run.
+        // Only names that actually execute — `finish`/`ask` are intercepted
+        // before the push below, and the marker must mirror that view.
+        let executing: Vec<&str> = calls
+            .iter()
+            .map(|call| call.name.as_str())
+            .filter(|name| *name != "finish" && *name != "ask")
+            .collect();
+        if !executing.is_empty() {
+            write_progress(request, steps, "tools", &executing);
+        }
         let mut mutated = false;
         let mut verified = false;
         let mut finish_call: Option<ToolCall> = None;
@@ -421,6 +436,7 @@ pub fn run(
         if let Some(call) = finish_call {
             let mut claim = parse_finish(&call);
             if claim.status == "done" && config.run_acceptance {
+                write_progress(request, steps, "verify", &[]);
                 let acceptance =
                     run_acceptance(request, &spec, started.elapsed(), config.max_wall_s);
                 verify = acceptance.lines;
@@ -942,6 +958,28 @@ fn record_step(
     Ok(())
 }
 
+/// Live marker for `loom top` (`doc/15` §12.1): current step, phase, and the
+/// tools this step is running. One small file, overwritten in place — the
+/// watcher tails it, so it must always hold exactly the current phase. Written
+/// best-effort: a marker failure must never abort the run.
+fn write_progress(request: &NativeRequest, step: u32, phase: &str, tools: &[&str]) {
+    let started_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let value = json!({
+        "v": 1,
+        "task_id": request.task_id,
+        "run_id": request.run_id,
+        "step": step,
+        "phase": phase,
+        "tools": tools,
+        "started_ms": started_ms,
+    });
+    let path = request.logs_dir.join("progress.json");
+    let _ = fs::write(path, value.to_string());
+}
+
 fn append_usage(
     request: &NativeRequest,
     usage: &Usage,
@@ -1398,6 +1436,19 @@ mod tests {
         assert_eq!(churn["rewrite_passes"], 0);
         assert_eq!(churn["model_alias"], "worker");
         assert_eq!(churn["model_id"], "test-model");
+
+        // Live marker for `loom top` (`doc/15` §12.1): the last phase written
+        // was verify, at the step that called finish.
+        let progress: Value = serde_json::from_str(
+            &fs::read_to_string(request.logs_dir.join("progress.json")).expect("progress"),
+        )
+        .expect("parse progress");
+        assert_eq!(progress["v"], 1);
+        assert_eq!(progress["task_id"], "T-20261106-001");
+        assert_eq!(progress["run_id"], "R-20261106-001");
+        assert_eq!(progress["step"], 2);
+        assert_eq!(progress["phase"], "verify");
+        assert!(progress["started_ms"].as_u64().expect("started_ms") > 0);
     }
 
     #[test]

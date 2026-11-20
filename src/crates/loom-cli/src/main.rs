@@ -35,6 +35,7 @@ mod resume_cmd;
 mod route_cmd;
 mod run_util;
 mod task_cmd;
+mod top_cmd;
 mod usage_cmd;
 mod verify_cmd;
 
@@ -115,6 +116,15 @@ enum Command {
     Status,
     /// Show tasks grouped by status, plus running/lock counts.
     Board,
+    /// Watch in-flight runs: phase, progress, tokens, latency (doc/15 §12.1).
+    Top {
+        /// Print one snapshot and exit (always the case for --format json).
+        #[arg(long)]
+        once: bool,
+        /// Refresh interval in seconds for the live view.
+        #[arg(long, default_value_t = 1)]
+        interval: u64,
+    },
     /// Budgeted tool wrappers.
     Tool {
         #[command(subcommand)]
@@ -590,6 +600,7 @@ fn run(cli: Cli) -> Result<i32> {
         },
         Command::Status => status(&project),
         Command::Board => board_cmd::board(&project, cli.format),
+        Command::Top { once, interval } => top_cmd::top(&project, once, interval, cli.format),
         Command::Capability { command } => capability(&project, command, cli.format),
         Command::Route {
             command,
