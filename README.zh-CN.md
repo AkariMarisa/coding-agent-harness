@@ -14,7 +14,7 @@ Loom 是一个独立编排内核：状态放在 `.loom/`，任务在独立 workt
 | 设计文档 | v0.2，见 [doc/README.zh-CN.md](doc/README.zh-CN.md) |
 | 工具输出协议 | v0.1，见 [doc/10-tool-output-protocol-v0.1.zh-CN.md](doc/10-tool-output-protocol-v0.1.zh-CN.md) |
 | Rust workspace | `src/`，crate 为 `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
-| 已实现 | `loom init/doctor/status`、`loom board`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom merge`、`loom resume` |
+| 已实现 | `loom init/doctor/status`、`loom board`、`loom top`、`loom tool *`、`loom artifact`、`loom capability *`、`loom route`、`loom usage record/ingest`、`loom ledger`、`loom task *`、`loom event list`、`loom context compile`、`loom prompt *`、`loom adapter list/canary`、`loom dispatch`（mock/native）、`loom verify`、`loom merge`、`loom resume`、`loom answer` |
 | 未实现 | 真实 goose/OpenCode adapter canary（需安装二进制）、native vs adapter A/B 基线、真实账单对账。详见 [doc/14-current-issues-and-blockers.zh-CN.md](doc/14-current-issues-and-blockers.zh-CN.md) |
 | 已设计未实现 | churn 治理余项（L1–L3 分级干预、成本感知重启；步骤级投影、patch-first/write 守卫、token 归因与 `loom churn stats` 已实现）、提问/回答协议与 attention inbox、skills 治理、agent/harness 驱动的本地 CI（hooks/review/attestation），见 [doc/15-agent-runtime-governance-and-engineering.zh-CN.md](doc/15-agent-runtime-governance-and-engineering.zh-CN.md) |
 
@@ -151,26 +151,15 @@ loom route stats                 # 按事件日志统计 worker 占比、升级/
 
 ## 实证：一个没有 Loom 的 10 天会话花掉多少
 
-一个真实仓库把 10 天的工作（修 bug、两台手机实机测试、F-Droid 发版、设计探索）跑成单个不断膨胀的 OpenCode 会话，全程没有 Loom。数据取自本地会话存储（[完整基线](doc/19-real-session-baseline.zh-CN.md)）：
+一个真实仓库把 10 天的工作（修 bug、两台手机实机测试、F-Droid 发版、设计探索）跑成单个不断膨胀的 OpenCode 会话，全程没有 Loom——数据取自本地会话存储：
 
 | 指标 | 实测值 |
 |---|---:|
-| 模型调用 | 2,739 次（95 个人类轮次） |
-| Cache read（每次调用重发的上下文） | **949M tokens** |
-| 单次调用平均上下文 | **约 346k tokens**，峰值约 900k，7 次 compaction 重建 |
-| 背在上下文里的截图 | 201 次 read，26.8MB base64 |
-| 实机测试日（10 天中的 3 天） | 占全部 cache read 的 64% |
-| 显式"现在什么状态"发问 | 3 次，另有 2 次手工汇总"你需要我配合什么" |
+| 模型调用 / cache read | 2,739 / **949M tokens** |
+| 单次调用平均上下文 | **约 346k**（峰值约 900k，7 次 compaction 重建） |
+| 集中度 | 3 个实机测试日 = 全部 cache read 的 64% |
 
-Loom 对每一条的处理方式，以及各自主张的证据等级：
-
-- **有界 packet 代替膨胀的对话记录**——每次运行按角色从 ≤30k/24k/8k tokens 起步（已实现；预算是代码，尚无规模级实测）；
-- **每个工作项一个上下文**——历史不跨项累积，compaction 重建归零（已实现；聚合效果未实测）；
-- **步进投影**——旧工具结果压成首行 + 引用（**实测：单步 input 降 46%~55%**，[16 §8.8](doc/16-runtime-governance-adoption-assessment.zh-CN.md)，n=1）；
-- **事件日志代替问模型**——`loom board` 重放状态；那个会话把测试计划重读了 95 次；
-- **Attention inbox 代替手工汇总协调**——已设计、未实现（[15 §2.2](doc/15-agent-runtime-governance-and-engineering.zh-CN.md)）。
-
-算术投影，待 native vs adapter A/B 验证：同样负载跑在平均 100–150k 的上下文里，cache read 落在 **约 300–400M，即 −55%~65%**。那个仓库里唯一一个 Loom 驱动的任务每步 input 12–31k（[14 §9](doc/14-current-issues-and-blockers.zh-CN.md)），比会话平均值低一个数量级。完整假设与暴露出的缺口（反应式人在环工作尚无入口，见 [18 §5.5](doc/18-agent-collaboration-workflow-proposal.zh-CN.md)）见 [doc/19](doc/19-real-session-baseline.zh-CN.md)。
+Loom 攻击这个乘积（调用数 × 上下文尺寸）的三把刀：有界 packet（按角色 ≤30k/24k/8k tokens，已实现）、每个工作项一个上下文（已实现）、步进投影（**实测单步 input 降 46%~55%**，[16 §8.8](doc/16-runtime-governance-adoption-assessment.zh-CN.md)）。算术投影，待 native vs adapter A/B 验证：**cache read −55%~65%**。完整基线、假设与暴露出的工作流缺口（反应式人在环工作尚无入口，[18 §5.5](doc/18-agent-collaboration-workflow-proposal.zh-CN.md)）见 [doc/19](doc/19-real-session-baseline.zh-CN.md)。
 
 ## 设计入口
 

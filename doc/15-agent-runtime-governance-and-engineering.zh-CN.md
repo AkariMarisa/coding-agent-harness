@@ -1267,7 +1267,7 @@ agent 会重查几步前已经查到的事实——第 3 步答过的 `node --ve
 
 ## 12. 观测与声明式分派（来自其他工具的笔记）
 
-> 状态：**方向记录，未实施**（2026-11-15）。来自使用其他工具（OpenCode、Codex CLI）的四条体验，映射到 Loom 的架构上。本节不排期；它喂给 §3（skills）与待实现的问答协议。
+> 状态：**方向记录；§12.1 已实施（2026-11-20），其余未排期**（记录于 2026-11-15，来自使用其他工具——OpenCode、Codex CLI 的四条体验，映射到 Loom 架构上）。§12.1 已落地为 `loom top`；§12.2 喂给 `questions.json` 协议（2026-11-18 已落地，见 §2.4），§12.3 喂给 §3（skills，仍待实现）。
 
 ### 12.1 用户可见的子代理进度
 
@@ -1283,7 +1283,7 @@ agent 会重查几步前已经查到的事实——第 3 步答过的 `node --ve
 | 响应多快 | 上一步 `latency_ms`（已记录）+ 累计平均 |
 | 结果面 | acceptance 已过 / 未跑（run 收尾时可得） |
 
-Loom 落点：`loom top`（或 `loom watch`）命令，tail `usage.jsonl` + `run.json` + 锁表，在 `dispatch` 阻塞时用第二个终端跑；可选加上面的 `step.started` 标记。边界：opencode/goose adapter 内部的会话**按契约不可见**（进程 + 文件 + exit code）；要暴露它们属于 adapter preset，不属于 core。
+落地（2026-11-20）：`loom top` tail `usage.jsonl` + `run.json` + `logs/progress.json` + 锁表，在 `dispatch` 阻塞时用第二个终端跑——pretty 模式在 TTY 上实时刷新，`--once`/`--format json` 永远只打印一份快照。上面的 `step.started` 标记随它一起落地为 `logs/progress.json`（按相尽力而为地写：`model` → `tools` → `verify`），当前动作因此不再滞后一步。watcher 严格只读：直接打开 run 的文件而不是 `Run::open`（后者会把它正要读的目录创建出来），读锁只过滤不回收。边界不变：opencode/goose adapter 内部的会话**按契约不可见**（进程 + 文件 + exit code）；要暴露它们属于 adapter preset，不属于 core。
 
 与 harness 无关的通用形态：子代理发布一条轻量进度记录（当前动作、步号、started_at），父面板聚合。无论底层是哪个 harness，子代理面板都是这个形状。
 

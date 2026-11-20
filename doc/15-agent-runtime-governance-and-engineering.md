@@ -1268,7 +1268,7 @@ Target: not zero re-queries — **immutable facts without re-queries, volatile f
 
 ## 12. Observability and declarative dispatch (notes from other tools)
 
-> Status: **direction record, not implemented** (2026-11-15). Recorded from using other tools (OpenCode, Codex CLI): four experiences mapped onto Loom's architecture. Nothing here is scheduled; it feeds §3 (skills) and the pending questions protocol.
+> Status: **direction record; §12.1 implemented (2026-11-20), the rest not scheduled** (recorded 2026-11-15 from using other tools — OpenCode, Codex CLI: four experiences mapped onto Loom's architecture). §12.1 landed as `loom top`; §12.2 feeds the `questions.json` protocol (landed 2026-11-18, see §2.4) and §12.3 feeds §3 (skills, still pending).
 
 ### 12.1 User-visible sub-agent progress
 
@@ -1284,7 +1284,7 @@ A user-facing progress line should be derived from existing state, with at most 
 | response latency | previous step `latency_ms` (already recorded) plus cumulative average |
 | outcome surface | acceptance passed / remaining (available at run end) |
 
-Loom landing: a `loom top` (or `loom watch`) command that tails `usage.jsonl` + `run.json` + locks, runnable in a second terminal while `dispatch` blocks; optionally the `step.started` marker above. Boundary: sessions inside opencode/goose adapters are invisible **by contract** (process + files + exit code); surfacing them belongs to adapter presets, not the core.
+Landing (2026-11-20): `loom top` tails `usage.jsonl` + `run.json` + `logs/progress.json` + locks, runnable in a second terminal while `dispatch` blocks — pretty mode live-refreshes on a TTY, `--once`/`--format json` always prints exactly one snapshot. The `step.started` marker above shipped with it as `logs/progress.json` (best-effort write per phase: `model` → `tools` → `verify`), so the current action does not lag one step. The watcher is strictly read-only: it opens run files directly instead of `Run::open` (which would create the directory it was about to read) and filters locks without reclaiming them. Boundary unchanged: sessions inside opencode/goose adapters are invisible **by contract** (process + files + exit code); surfacing them belongs to adapter presets, not the core.
 
 The harness-independent pattern: a sub-agent publishes a lightweight progress record (current action, step, started_at) and the parent aggregates it. That is the shape a sub-agent panel takes regardless of which harness runs it.
 

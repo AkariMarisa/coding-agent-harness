@@ -14,7 +14,7 @@ Loom is a standalone orchestration kernel: state lives in `.loom/`, tasks run in
 | Design docs | v0.2, see [doc/README.md](doc/README.md) |
 | Tool output protocol | v0.1, see [doc/10-tool-output-protocol-v0.1.md](doc/10-tool-output-protocol-v0.1.md) |
 | Rust workspace | `src/`, crates: `loom-core` / `loom-store` / `loom-tools` / `loom-context` / `loom-adapter` / `loom-native` / `loom-cli` |
-| Implemented | `loom init/doctor/status`, `loom board`, `loom tool *`, `loom artifact`, `loom capability *`, `loom route`, `loom usage record/ingest`, `loom ledger`, `loom task *`, `loom event list`, `loom context compile`, `loom prompt *`, `loom adapter list/canary`, `loom dispatch` (mock/native), `loom verify`, `loom merge`, `loom resume` |
+| Implemented | `loom init/doctor/status`, `loom board`, `loom top`, `loom tool *`, `loom artifact`, `loom capability *`, `loom route`, `loom usage record/ingest`, `loom ledger`, `loom task *`, `loom event list`, `loom context compile`, `loom prompt *`, `loom adapter list/canary`, `loom dispatch` (mock/native), `loom verify`, `loom merge`, `loom resume`, `loom answer` |
 | Not implemented | Real goose/OpenCode adapter canary (requires installed binaries), native vs adapter A/B baseline, real billing reconciliation. See [doc/14-current-issues-and-blockers.md](doc/14-current-issues-and-blockers.md) |
 | Designed but not implemented | Remaining churn governance (L1–L3 graded intervention, cost-aware restart; step-level projection, patch-first/write guards, token attribution and `loom churn stats` are implemented), the question/answer protocol and attention inbox, skills governance, agent/harness-driven local CI (hooks/review/attestation). See [doc/15-agent-runtime-governance-and-engineering.md](doc/15-agent-runtime-governance-and-engineering.md) |
 
@@ -151,26 +151,15 @@ loom route stats                 # worker share, escalation/switch counts, routi
 
 ## Evidence: What a 10-Day Session Costs Without Loom
 
-A real repository ran 10 days of work (bug fixes, real-device testing, F-Droid release, design exploration) as a single growing OpenCode conversation, without Loom. Measured from the local session store ([full baseline](doc/19-real-session-baseline.md)):
+A real repository ran 10 days of work (bug fixes, real-device testing, F-Droid release, design exploration) as a single growing OpenCode conversation, without Loom — measured from the local session store:
 
 | Metric | Measured |
 |---|---:|
-| Model calls | 2,739 (95 human turns) |
-| Cache read (context re-sent per call) | **949M tokens** |
-| Average context per call | **~346k tokens**, peak ~900k, 7 compaction rebuilds |
-| Screenshots carried in context | 201 reads, 26.8MB of base64 |
-| Device-testing days (3 of 10) | 64% of all cache read |
-| Explicit "what's the status" asks | 3, plus 2 hand-assembled "what do you need from me" summaries |
+| Model calls / cache read | 2,739 / **949M tokens** |
+| Average context per call | **~346k** (peak ~900k, 7 compaction rebuilds) |
+| Concentration | 3 device-testing days = 64% of all cache read |
 
-What Loom does about each, and the evidence grade of the claim:
-
-- **Bounded packet instead of a growing transcript** — every run starts at ≤30k/24k/8k tokens by role (implemented; budgets are code, not yet measured at scale);
-- **One context per work item** — history never accumulates across items, so compaction rebuilds go to zero (implemented; aggregate effect unmeasured);
-- **Step-level projection** — old tool results compress to a first line + reference (**measured: −46~55% per-step input**, [16 §8.8](doc/16-runtime-governance-adoption-assessment.md), n=1);
-- **Event log instead of asking the model** — `loom board` replays state; the test plan in that session was re-read 95 times;
-- **Attention inbox instead of hand-summarized coordination** — designed, not implemented ([15 §2.2](doc/15-agent-runtime-governance-and-engineering.md)).
-
-Arithmetic projection, pending the native-vs-adapter A/B: same workload at ~100–150k average context puts cache read at **~300–400M, i.e. −55~65%**. The one Loom-driven task in that repository ran at 12–31k input per step ([14 §9](doc/14-current-issues-and-blockers.md)), an order of magnitude under the session's average. Full assumptions and the gaps this exposed (reactive human-in-the-loop work has no entry path yet, see [18 §5.5](doc/18-agent-collaboration-workflow-proposal.md)) are in [doc/19](doc/19-real-session-baseline.md).
+Loom attacks that product (calls × context size) with bounded packets (≤30k/24k/8k tokens by role, implemented), one context per work item (implemented), and step-level projection (**measured −46~55% per-step input**, [16 §8.8](doc/16-runtime-governance-adoption-assessment.md)). Arithmetic projection, pending the native-vs-adapter A/B: **−55~65% cache read**. Full baseline, assumptions, and the workflow gaps this exposed (reactive human-in-the-loop work has no entry path yet, [18 §5.5](doc/18-agent-collaboration-workflow-proposal.md)): [doc/19](doc/19-real-session-baseline.md).
 
 ## Design Entry Points
 
