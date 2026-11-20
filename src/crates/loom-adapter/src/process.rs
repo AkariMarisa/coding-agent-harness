@@ -75,6 +75,13 @@ pub fn execute(request: &AdapterRequest) -> Result<ProcessOutcome> {
             stdin
                 .write_all(&packet)
                 .with_context(|| "write packet to adapter stdin")?;
+            // Skill mentions ride the same stdin (`doc/15` §12.3): the packet
+            // carries the bodies, opencode's loader needs the @-mention.
+            if let Some(extra) = preset.stdin_extra(&request.skills) {
+                stdin
+                    .write_all(extra.as_bytes())
+                    .with_context(|| "write skill mentions to adapter stdin")?;
+            }
             drop(stdin);
         }
     }

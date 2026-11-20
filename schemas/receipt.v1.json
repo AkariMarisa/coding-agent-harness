@@ -104,6 +104,12 @@
       "type": "string",
       "enum": ["pass", "request_changes", "human", "fix_plan", "split", "reject"],
       "description": "Parsed from the report for review/judgment tasks; absent otherwise."
+    },
+    "skills": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {"type": "string", "minLength": 1, "maxLength": 64},
+      "description": "Skill ids injected into this run's packet, copied from the dispatched task snapshot by `loom verify`; absent when none were declared."
     }
   }
 }

@@ -73,6 +73,12 @@
         }
       }
     },
+    "skills": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {"type": "string", "minLength": 1, "maxLength": 64},
+      "description": "Skill ids whose SKILL.md bodies were injected into this packet; the injection record `loom verify` copies onto the receipt (doc/15 §12.3). Absent when none were declared."
+    },
     "notes": {"type": "array", "items": {"type": "string"}}
   }
 }

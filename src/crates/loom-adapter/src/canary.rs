@@ -264,6 +264,7 @@ fn build_mock_request(dir: &Path) -> AdapterRequest {
         branch: "agent/canary".to_string(),
         timeout_s: 10,
         max_tokens: None,
+        skills: spec.skills.clone(),
     }
 }
 

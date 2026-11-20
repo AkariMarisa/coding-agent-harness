@@ -273,6 +273,17 @@ pub(crate) fn run_verify(
         .unwrap_or_else(|| run.report_path().to_string_lossy().into_owned());
     receipt.verdict = verdict;
 
+    // Skills on the receipt come from the run's context manifest — compile is
+    // the injection record (it bails on a missing/oversized skill), and this
+    // is where consumers look (`doc/15` §12.3). A manifest from before the
+    // feature parses to an empty list via serde default; a missing one (run
+    // never compiled) degrades the same way rather than failing verify.
+    receipt.skills = fs::read_to_string(run.manifest_path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<loom_context::ContextManifest>(&text).ok())
+        .map(|manifest| manifest.skills)
+        .unwrap_or_default();
+
     // Required artifacts.
     let mut artifacts = Vec::new();
     if spec

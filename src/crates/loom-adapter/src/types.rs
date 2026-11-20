@@ -58,6 +58,11 @@ pub struct AdapterRequest {
     pub branch: String,
     pub timeout_s: u64,
     pub max_tokens: Option<u64>,
+    /// Declared skill ids from the dispatched TaskSpec. The packet already
+    /// carries the injected bodies; presets whose executor has its own skill
+    /// loader (opencode) additionally get `@skill-id` mentions
+    /// (`doc/15` §12.3) — one field, two consumers.
+    pub skills: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

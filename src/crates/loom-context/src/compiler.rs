@@ -33,7 +33,9 @@ impl ContextKind {
         }
     }
 
-    /// Hard budgets from `doc/08` §6.2 and `doc/04` §3.1.
+    /// Hard budgets from `doc/08` §6.2 and `doc/04` §3.1; `skills` is the
+    /// cap for injected skill bodies (`doc/15` §12.3) — over it, compile fails
+    /// rather than truncating a declared skill mid-instruction.
     pub fn budget(self) -> ContextBudget {
         match self {
             Self::Main => ContextBudget {
@@ -46,6 +48,7 @@ impl ContextKind {
                 snippets: 10_000,
                 failure: 4_000,
                 schema: 2_000,
+                skills: 4_000,
             },
             Self::Worker => ContextBudget {
                 total_tokens: 24_000,
@@ -57,6 +60,7 @@ impl ContextKind {
                 snippets: 12_000,
                 failure: 4_000,
                 schema: 1_000,
+                skills: 4_000,
             },
             Self::Judgment => ContextBudget {
                 total_tokens: 8_000,
@@ -68,6 +72,7 @@ impl ContextKind {
                 snippets: 1_500,
                 failure: 1_000,
                 schema: 500,
+                skills: 2_000,
             },
         }
     }
@@ -84,6 +89,7 @@ pub struct ContextBudget {
     pub snippets: usize,
     pub failure: usize,
     pub schema: usize,
+    pub skills: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +177,10 @@ pub struct ContextManifest {
     pub degraded: bool,
     pub sections: Vec<ContextSection>,
     pub input_hashes: Vec<InputHash>,
+    /// Skill ids whose bodies were injected into this packet — the injection
+    /// record `loom verify` copies onto the receipt (`doc/15` §12.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
     pub notes: Vec<String>,
 }
 
@@ -189,6 +199,7 @@ impl Default for ContextManifest {
             degraded: false,
             sections: Vec::new(),
             input_hashes: Vec::new(),
+            skills: Vec::new(),
             notes: Vec::new(),
         }
     }
@@ -289,6 +300,7 @@ pub fn compile(request: &CompileRequest<'_>) -> Result<CompiledContext> {
     let (snippet_text, inputs, snippet_notes) =
         render_inputs(request.project, task, budget.snippets)?;
     notes.extend(snippet_notes);
+    let (skills_text, injected_skills) = render_skills(request.project, task, budget.skills)?;
     let failure_text = request
         .failure_pack
         .as_ref()
@@ -332,6 +344,22 @@ pub fn compile(request: &CompileRequest<'_>) -> Result<CompiledContext> {
             essential: true,
             truncated: false,
         },
+    ];
+    // Declared skills sit right after the task they serve; injected as a whole
+    // or not at all (render_skills already bailed over budget), so this draft
+    // never enters the trim order.
+    if !skills_text.is_empty() {
+        drafts.push(Draft {
+            name: "skills",
+            source: ".opencode/skills",
+            file: "skills.md".to_string(),
+            text: skills_text,
+            cap: budget.skills,
+            essential: true,
+            truncated: false,
+        });
+    }
+    drafts.extend([
         Draft {
             name: "dependencies",
             source: "tasks",
@@ -350,7 +378,7 @@ pub fn compile(request: &CompileRequest<'_>) -> Result<CompiledContext> {
             essential: false,
             truncated: false,
         },
-    ];
+    ]);
     if let Some(text) = failure_text {
         drafts.push(Draft {
             name: "failure",
@@ -489,6 +517,7 @@ pub fn compile(request: &CompileRequest<'_>) -> Result<CompiledContext> {
         degraded: sections.iter().any(|section| section.truncated),
         sections,
         input_hashes: inputs,
+        skills: injected_skills,
         notes,
     };
 
@@ -529,6 +558,81 @@ fn read_human_file(project: &Project, name: &str, cap: usize, notes: &mut Vec<St
     };
     let (text, _) = fit(&text, cap);
     text
+}
+
+/// Inject declared skill bodies into the packet (`doc/15` §12.3): loading is
+/// declaration, so a missing or oversized skill fails the compile instead of
+/// silently shipping a half-skill to the model.
+///
+/// References are not inlined — only their paths, read on demand by the
+/// executor the same way `inputs` work. Ids resolve under
+/// `<project>/.opencode/skills/<id>/SKILL.md`; the YAML frontmatter is kept
+/// (it carries the skill's own description, which tells the model what the
+/// skill is for).
+fn render_skills(project: &Project, task: &TaskSpec, cap: usize) -> Result<(String, Vec<String>)> {
+    if task.skills.is_empty() {
+        return Ok((String::new(), Vec::new()));
+    }
+
+    let mut text = String::from("# skills\n");
+    let mut notes = Vec::new();
+    let mut injected = Vec::new();
+
+    for id in &task.skills {
+        let path = project
+            .root
+            .join(".opencode")
+            .join("skills")
+            .join(id)
+            .join("SKILL.md");
+        let body = fs::read_to_string(&path).with_context(|| {
+            format!(
+                "skill {id} declared by {} not found at {}",
+                task.task_id,
+                path.display()
+            )
+        })?;
+        text.push_str(&format!("\n## skill: {id}\n"));
+        text.push_str(body.trim_end());
+        text.push('\n');
+
+        // References stay on disk: list paths, never inline their content.
+        let references_dir = path.parent().expect("skill dir").join("references");
+        if let Ok(entries) = fs::read_dir(&references_dir) {
+            let mut paths: Vec<String> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|candidate| candidate.is_file())
+                .map(|candidate| {
+                    candidate
+                        .strip_prefix(&project.root)
+                        .unwrap_or(&candidate)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            paths.sort();
+            if !paths.is_empty() {
+                text.push_str(&format!(
+                    "references (read on demand): {}\n",
+                    paths.join(", ")
+                ));
+                notes.push(format!(
+                    "skill {id}: {} reference file(s) available by path",
+                    paths.len()
+                ));
+            }
+        }
+        injected.push(id.clone());
+    }
+
+    let tokens = estimate_tokens(&text);
+    if tokens > cap {
+        bail!(
+            "declared skills need {tokens} tokens > skills budget {cap}; drop skills or split the task"
+        );
+    }
+    Ok((text, injected))
 }
 
 fn render_constraints(
@@ -1029,6 +1133,102 @@ mod tests {
         let compiled = compile(&request).expect("compile");
         assert!(compiled.packet.contains("failure pack"));
         assert!(compiled.packet.contains("assertion failed"));
+    }
+
+    /// Fixture: a skill directory the way skill-pilot lays them out.
+    fn write_skill(project: &Project, id: &str, body: &str, references: &[&str]) {
+        let skill_dir = project.root.join(".opencode/skills").join(id);
+        fs::create_dir_all(skill_dir.join("references")).expect("mkdir");
+        fs::write(skill_dir.join("SKILL.md"), body).expect("write SKILL.md");
+        for reference in references {
+            fs::write(skill_dir.join("references").join(reference), "# ref\n").expect("write ref");
+        }
+    }
+
+    #[test]
+    fn declared_skills_are_injected_with_references_by_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project::at(dir.path());
+        fs::create_dir_all(project.loom_dir()).expect("mkdir");
+        let source = project.root.join("src");
+        fs::create_dir_all(&source).expect("mkdir");
+        fs::write(source.join("lib.rs"), "fn a() {}\n").expect("write");
+        write_skill(
+            &project,
+            "docs-writing",
+            "---\nname: Docs\ndescription: when to write docs\n---\n# Docs Writing\n\nLead with the answer.\n",
+            &["ai-tells.md", "markdown.md"],
+        );
+
+        let mut spec = task();
+        spec.skills = vec!["docs-writing".into()];
+        let request = request(&project, &spec);
+        let compiled = compile(&request).expect("compile");
+
+        // Body + frontmatter arrive verbatim; references stay on disk as paths.
+        assert!(compiled.packet.contains("## skill: docs-writing"));
+        assert!(compiled.packet.contains("Lead with the answer."));
+        assert!(compiled.packet.contains("description: when to write docs"));
+        assert!(
+            compiled
+                .packet
+                .contains(".opencode/skills/docs-writing/references/ai-tells.md"),
+            "reference paths listed for on-demand reads"
+        );
+        assert!(
+            !compiled.packet.contains("# ref"),
+            "reference bodies must not be inlined"
+        );
+
+        // The manifest is the injection record the receipt copies from.
+        assert_eq!(compiled.manifest.skills, ["docs-writing"]);
+        let section = compiled
+            .manifest
+            .sections
+            .iter()
+            .find(|section| section.name == "skills")
+            .expect("skills section");
+        assert_eq!(section.source, ".opencode/skills");
+        assert!(!section.truncated);
+        // The packet section is written to disk for on-demand re-reads.
+        assert!(compiled
+            .sections
+            .iter()
+            .any(|content| content.name == "skills" && content.file == "skills.md"));
+    }
+
+    #[test]
+    fn missing_or_oversized_skills_fail_the_compile() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project::at(dir.path());
+        fs::create_dir_all(project.loom_dir()).expect("mkdir");
+        let source = project.root.join("src");
+        fs::create_dir_all(&source).expect("mkdir");
+        fs::write(source.join("lib.rs"), "fn a() {}\n").expect("write");
+
+        // Declared but absent: fail fast, never ship a task without its skill.
+        let mut spec = task();
+        spec.skills = vec!["no-such-skill".into()];
+        let req = request(&project, &spec);
+        let error = compile(&req).expect_err("missing skill must fail");
+        let message = format!("{error:#}");
+        assert!(message.contains("no-such-skill"), "{message}");
+
+        // Over the skills budget: fail rather than truncate mid-instruction.
+        write_skill(&project, "big-skill", &"x".repeat(40_000), &[]);
+        let mut spec = task();
+        spec.skills = vec!["big-skill".into()];
+        let req = request(&project, &spec);
+        let error = compile(&req).expect_err("oversized skill must fail");
+        let message = format!("{error:#}");
+        assert!(message.contains("skills budget"), "{message}");
+
+        // No declared skills → no section, manifest stays clean.
+        let plain = task();
+        let req = request(&project, &plain);
+        let compiled = compile(&req).expect("compile");
+        assert!(compiled.manifest.skills.is_empty());
+        assert!(!compiled.packet.contains("# skills"));
     }
 
     #[test]

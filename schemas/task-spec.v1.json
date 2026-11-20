@@ -76,6 +76,19 @@
         }
       }
     },
+    "skills": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "description": "Path-derived skill id under .opencode/skills/; the compiler injects its SKILL.md body into the packet (doc/15 §12.3)."
+      },
+      "default": []
+    },
     "constraints": {
       "type": "object",
       "additionalProperties": false,

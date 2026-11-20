@@ -225,6 +225,7 @@ mod tests {
             timeout_s: 10,
             max_tokens: None,
             attempt: 1,
+            skills: Vec::new(),
         }
     }
 

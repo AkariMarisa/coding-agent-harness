@@ -217,6 +217,11 @@ pub struct Receipt {
     /// Parsed from the report for review/judgment tasks; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<crate::verdict::Verdict>,
+    /// Skill ids injected into this run's packet (`doc/15` §12.3): copied
+    /// from the dispatched task snapshot by `loom verify`, so it records what
+    /// was injected, not what the spec happens to say later.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
 }
 
 fn default_version() -> String {
@@ -242,6 +247,7 @@ impl Receipt {
             next_hint: String::new(),
             report_path: String::new(),
             verdict: None,
+            skills: Vec::new(),
         }
     }
 
@@ -500,6 +506,25 @@ mod tests {
             parsed.verdict,
             Some(crate::verdict::Verdict::RequestChanges)
         );
+        parsed.validate().expect("valid");
+    }
+
+    #[test]
+    fn skills_roundtrip_or_stay_omitted() {
+        // Old-shape receipts (no skills) must keep parsing — struct default.
+        let plain = receipt();
+        let plain_text = serde_json::to_string(&plain).expect("json");
+        assert!(!plain_text.contains("skills"), "absent skills omitted");
+        let parsed: Receipt = serde_json::from_str(&plain_text).expect("parse");
+        assert!(parsed.skills.is_empty());
+
+        // Injected skills are recorded verbatim (`doc/15` §12.3).
+        let mut with_skills = receipt();
+        with_skills.skills = vec!["docs-writing".into(), "format-code".into()];
+        let text = serde_json::to_string(&with_skills).expect("json");
+        assert!(text.contains("\"skills\""));
+        let parsed: Receipt = serde_json::from_str(&text).expect("parse");
+        assert_eq!(parsed.skills, ["docs-writing", "format-code"]);
         parsed.validate().expect("valid");
     }
 

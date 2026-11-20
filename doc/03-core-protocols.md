@@ -240,6 +240,7 @@ Append-only, never rewrite history:
 | `depends_on` | string[] | Yes | Dependent task IDs; may be empty |
 | `workspace` | object | Yes | worktree/branch/path permissions |
 | `inputs` | object[] | Yes | File references; not content |
+| `skills` | string[] | No | Declared skill ids; bodies injected into the packet from `.opencode/skills/<id>/SKILL.md` (`doc/15` §12.3) |
 | `constraints` | object | Yes | Style, dependencies, maximum changes |
 | `acceptance` | object[] | Yes | At least 1 verify entry |
 | `budget` | object | Yes | token/cost/step/wall-clock |
@@ -382,6 +383,8 @@ After parsing the four lines, the runner generates `receipts/<task_id>.json` (th
 ```
 
 > Review and judgment tasks carry an optional `verdict` on the receipt (`pass` | `request_changes` | `human` | `fix_plan` | `split` | `reject`), parsed from the report at `output.report_path` instead of grepped. A report without a parseable verdict fails the task. The verdict is also emitted as a `task.verdict` event and is consumed by the merge queue (§13): while reviews exist for the merged task but none has returned `pass`, merge is blocked with `task.blocked(code=review_changes)`; one `pass` clears standing objections.
+>
+> A receipt also carries optional `skills` — the ids whose bodies were actually injected into this run's packet. `loom verify` copies them from the run's context manifest (compile is the injection record; it fails on a missing or oversized skill), so the receipt answers "what was injected", not "what the spec declared later". Absent when no skills were declared.
 
 ### 5.4 Status Semantics
 

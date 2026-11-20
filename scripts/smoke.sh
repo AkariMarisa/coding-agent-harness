@@ -224,6 +224,96 @@ loom top --format pretty | grep -q '^loom top' || {
     exit 1
 }
 
+# --- Declarative skills (doc/15 §12.3): loaded by declaration, never discovery ---
+# Skills resolve under the project root, so the fixture lives in the smoke root.
+mkdir -p /work/.smoke/.opencode/skills/smoke-skill
+cat > /work/.smoke/.opencode/skills/smoke-skill/SKILL.md <<'EOF'
+---
+name: Smoke Skill
+description: fixture skill for the smoke run
+---
+# Smoke Skill
+
+SKILL_BODY_MARKER: lead with the answer; cut throat-clearing.
+EOF
+
+cat > /work/.smoke/task-skills.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-009",
+  "goal_id": "G-20261106-smoke",
+  "title": "skills injection",
+  "role": "implement",
+  "tier": "worker",
+  "depends_on": [],
+  "workspace": {
+    "mode": "in_place",
+    "base_ref": "main",
+    "branch": "agent/T-20261106-009",
+    "allowed_paths": ["src/**"],
+    "forbidden_paths": []
+  },
+  "inputs": [],
+  "skills": ["smoke-skill"],
+  "constraints": {"max_files_touched": 4, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "true", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 5, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": []}
+}
+EOF
+loom task add --file /work/.smoke/task-skills.json > /dev/null
+
+# Compile injects the body and records the ids in the manifest.
+loom context compile T-20261106-009 --out /work/.smoke/skills-ctx --format json \
+    | grep -q '"skills"' || {
+    echo "expected manifest to record injected skills" >&2; exit 1;
+}
+grep -q 'SKILL_BODY_MARKER' /work/.smoke/skills-ctx/packet.md || {
+    echo "expected skill body injected into the packet" >&2; exit 1;
+}
+
+# Declared but absent → compile fails fast, never ships a skill-less packet.
+cat > /work/.smoke/task-bad-skill.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-010",
+  "goal_id": "G-20261106-smoke",
+  "title": "missing skill",
+  "role": "implement",
+  "tier": "worker",
+  "depends_on": [],
+  "workspace": {
+    "mode": "in_place",
+    "base_ref": "main",
+    "branch": "agent/T-20261106-010",
+    "allowed_paths": ["src/**"],
+    "forbidden_paths": []
+  },
+  "inputs": [],
+  "skills": ["no-such-skill"],
+  "constraints": {"max_files_touched": 4, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "true", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 5, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": []}
+}
+EOF
+loom task add --file /work/.smoke/task-bad-skill.json > /dev/null
+if loom context compile T-20261106-010 --format json > /dev/null 2>&1; then
+    echo "expected compile to fail for a missing skill" >&2
+    exit 1
+fi
+
+# Dispatch + verify: the receipt records what was injected (mechanically checkable).
+loom dispatch T-20261106-009 --adapter mock > /dev/null
+loom verify T-20261106-009 --format json > /work/.smoke/verify-skills.json || true
+skills_receipt=$(grep -o '"receipt": "[^"]*"' /work/.smoke/verify-skills.json | head -1 | sed 's/.*"receipt": "//; s/"$//')
+grep -q '"skills"' "$skills_receipt" || {
+    echo "expected receipt to record injected skills" >&2; exit 1;
+}
+grep -q 'smoke-skill' "$skills_receipt" || {
+    echo "expected receipt to name the injected skill" >&2; exit 1;
+}
+
 # --- Review verdict gate (doc/03): parse → fail fast → block/allow merge ---
 # The scenario needs git (worktree mode + a committed report fixture); the
 # rest of this file stays in-place and is unaffected.

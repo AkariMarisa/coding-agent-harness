@@ -334,6 +334,7 @@ mod tests {
                 forbidden_paths: vec![],
             },
             inputs: vec![],
+            skills: Vec::new(),
             constraints: loom_core::TaskConstraints::default(),
             acceptance: vec![loom_core::Acceptance {
                 id: "A1".into(),

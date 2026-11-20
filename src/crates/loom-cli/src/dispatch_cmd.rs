@@ -182,6 +182,7 @@ fn prepare_attempt(
         branch: spec.workspace.branch.clone(),
         timeout_s: timeout,
         max_tokens: Some(spec.budget.max_output_tokens),
+        skills: spec.skills.clone(),
     };
 
     let base_sha = git_head(&workspace).unwrap_or_default();

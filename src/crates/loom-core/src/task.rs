@@ -202,6 +202,11 @@ pub struct TaskSpec {
     pub depends_on: Vec<String>,
     pub workspace: TaskWorkspace,
     pub inputs: Vec<TaskInput>,
+    /// Declared skill ids (directories under `.opencode/skills/`); the context
+    /// compiler injects each `SKILL.md` body into the packet — loading is
+    /// declaration, never model discovery (`doc/15` §12.3).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
     pub constraints: TaskConstraints,
     pub acceptance: Vec<Acceptance>,
     pub budget: TaskBudget,
@@ -257,6 +262,38 @@ impl TaskSpec {
         }
         for input in &self.inputs {
             input.validate()?;
+        }
+
+        // Skill ids are path-derived directory names (`doc/15` §12.3 rule 3):
+        // ASCII, no separators, no traversal — the compiler resolves them
+        // under `.opencode/skills/`, so a bad id can only fail later.
+        if self.skills.len() > 8 {
+            return Err("skills must contain at most 8 entries".to_string());
+        }
+        let mut skill_ids = HashSet::new();
+        for id in &self.skills {
+            if id.is_empty() {
+                return Err("skill id must not be empty".to_string());
+            }
+            if id.len() > 64 {
+                return Err("skill id must be <= 64 characters".to_string());
+            }
+            if !id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+            {
+                return Err(format!(
+                    "skill id must be ASCII [A-Za-z0-9._-] (path-derived, language-neutral): {id}"
+                ));
+            }
+            if id.starts_with('.') || id.contains("..") {
+                return Err(format!(
+                    "skill id must not start with '.' or contain '..': {id}"
+                ));
+            }
+            if !skill_ids.insert(id.as_str()) {
+                return Err(format!("duplicate skill id: {id}"));
+            }
         }
 
         if self.acceptance.is_empty() {
@@ -792,6 +829,49 @@ mod tests {
         let mut bad = spec.clone();
         bad.notes = Some("x".repeat(501));
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn validates_skill_ids_as_plain_path_names() {
+        // `doc/15` §12.3 rule 3: ids are path-derived, ASCII, language-neutral.
+        let mut spec = task("T-20261104-001");
+        spec.skills = vec!["docs-writing".into(), "code_quality-review.2".into()];
+        assert!(spec.validate().is_ok());
+
+        let mut dup = spec.clone();
+        dup.skills.push("docs-writing".into());
+        assert!(dup.validate().unwrap_err().contains("duplicate skill id"));
+
+        let mut traversal = spec.clone();
+        traversal.skills = vec!["../secrets".into()];
+        assert!(traversal.validate().is_err());
+
+        let mut separator = spec.clone();
+        separator.skills = vec!["a/b".into()];
+        assert!(separator.validate().is_err());
+
+        let mut dotted = spec.clone();
+        dotted.skills = vec!["..".into()];
+        assert!(dotted.validate().is_err());
+
+        let mut empty = spec.clone();
+        empty.skills = vec!["".into()];
+        assert!(empty.validate().is_err());
+
+        let mut non_ascii = spec.clone();
+        non_ascii.skills = vec!["文档写作".into()];
+        assert!(non_ascii.validate().is_err());
+
+        let mut too_many = spec.clone();
+        too_many.skills = (0..9).map(|i| format!("skill-{i}")).collect();
+        assert!(too_many.validate().unwrap_err().contains("at most 8"));
+
+        // Absent field deserializes to empty (old task.json files keep working).
+        let mut legacy = serde_json::to_value(task("T-20261104-001")).expect("value");
+        legacy.as_object_mut().expect("object").remove("skills");
+        let parsed: TaskSpec = serde_json::from_value(legacy).expect("parse legacy");
+        assert!(parsed.skills.is_empty());
+        assert!(parsed.validate().is_ok());
     }
 
     #[test]

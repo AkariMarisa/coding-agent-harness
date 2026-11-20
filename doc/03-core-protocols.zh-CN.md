@@ -240,6 +240,7 @@ POST /api/auth/login → AuthController → AuthService → UserRepository → S
 | `depends_on` | string[] | 是 | 依赖任务 ID；可为空 |
 | `workspace` | object | 是 | worktree/branch/路径权限 |
 | `inputs` | object[] | 是 | 文件引用；不是内容 |
+| `skills` | string[] | 否 | 声明的 skill id；正文由 `.opencode/skills/<id>/SKILL.md` 注入 packet（`doc/15` §12.3） |
 | `constraints` | object | 是 | 风格、依赖、最大改动 |
 | `acceptance` | object[] | 是 | 至少 1 条 verify |
 | `budget` | object | 是 | token/成本/步数/墙钟 |
@@ -382,6 +383,8 @@ runner 解析四行后，生成 `receipts/<task_id>.json`（实现写入 `.loom/
 ```
 
 > review 与 judgment 任务的回执带可选 `verdict`（`pass` | `request_changes` | `human` | `fix_plan` | `split` | `reject`），从 `output.report_path` 的报告解析而非 grep；报告解析不出 verdict 时该任务判失败。verdict 同时以 `task.verdict` 事件发出，并被合并队列（§13）消费：当被合并任务存在 review 但无一返回 `pass` 时，以 `task.blocked(code=review_changes)` 阻断合并；一个 `pass` 清除既有异议。
+>
+> 回执还携带可选的 `skills`——真正注入进本 run packet 的 skill id。`loom verify` 从该 run 的 context manifest 抄写（编译即注入记录；skill 缺失或超预算时编译直接失败），因此回执回答的是"注入了什么"，而非"事后 spec 声明了什么"。未声明 skill 时缺省不写。
 
 ### 5.4 状态语义
 

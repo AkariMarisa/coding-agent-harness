@@ -91,6 +91,23 @@ impl AdapterPreset {
             .collect()
     }
 
+    /// Extra stdin content appended after the packet, for executors whose
+    /// skill loader needs an explicit mention instead of (or in addition to)
+    /// the injected bodies — opencode's `@skill-id` is its load entrypoint
+    /// (`doc/15` §12.3). None for every other preset.
+    pub fn stdin_extra(&self, skills: &[String]) -> Option<String> {
+        if self.kind != AdapterKind::Opencode || skills.is_empty() {
+            return None;
+        }
+        let mentions: Vec<String> = skills.iter().map(|id| format!("@{id}")).collect();
+        // Unverified against a live binary until the opencode canary runs
+        // (doc/14 blocker); the mention form follows doc/15 §12.3.
+        Some(format!(
+            "\n\nLoad the declared skills: {}\n",
+            mentions.join(" ")
+        ))
+    }
+
     pub fn is_available(&self) -> bool {
         if self.kind == AdapterKind::Mock {
             return true;
@@ -142,4 +159,36 @@ pub fn which(executable: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::AdapterKind;
+
+    #[test]
+    fn skill_mentions_only_for_opencode_and_only_with_skills() {
+        let skills = vec!["docs-writing".to_string(), "format-code".to_string()];
+
+        let opencode = preset(AdapterKind::Opencode);
+        let extra = opencode
+            .stdin_extra(&skills)
+            .expect("opencode gets mentions");
+        assert!(extra.contains("@docs-writing"), "{extra}");
+        assert!(extra.contains("@format-code"), "{extra}");
+        // Mentions come after the packet, never inside it.
+        assert!(extra.starts_with("\n\n"));
+
+        // No declared skills → nothing appended (no trailing noise).
+        assert!(opencode.stdin_extra(&[]).is_none());
+
+        // Every other preset consumes the injected bodies from the packet;
+        // @-mentions are opencode's entrypoint, not theirs.
+        for kind in [AdapterKind::Mock, AdapterKind::Native, AdapterKind::Goose] {
+            assert!(
+                preset(kind).stdin_extra(&skills).is_none(),
+                "{kind:?} must not append mentions"
+            );
+        }
+    }
 }
