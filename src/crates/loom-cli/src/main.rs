@@ -28,6 +28,7 @@ mod context_cmd;
 mod dispatch_cmd;
 mod event_cmd;
 mod goal_cmd;
+mod inbox_cmd;
 mod merge_cmd;
 mod model_cmd;
 mod prompt_cmd;
@@ -124,6 +125,30 @@ enum Command {
         /// Refresh interval in seconds for the live view.
         #[arg(long, default_value_t = 1)]
         interval: u64,
+    },
+    /// List or act on items that need human attention (doc/15 §2.2).
+    #[command(args_conflicts_with_subcommands = true)]
+    Inbox {
+        #[command(subcommand)]
+        command: Option<InboxCommand>,
+        /// One statusline-ready line instead of the list.
+        #[arg(long)]
+        line: bool,
+        /// Exit 2 when any blocking item exists (for scripts and hooks).
+        #[arg(long)]
+        check: bool,
+        /// Only this kind: question|approval|operation|review|reminder.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Only items belonging to this task.
+        #[arg(long)]
+        task: Option<String>,
+        /// Include resolved/expired items still within the retention window.
+        #[arg(long)]
+        all: bool,
+        /// Alias for --format json.
+        #[arg(long)]
+        json: bool,
     },
     /// Budgeted tool wrappers.
     Tool {
@@ -382,6 +407,29 @@ enum EventCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum InboxCommand {
+    /// Mark an item as seen; it stays open and keeps counting.
+    Ack { item_id: String },
+    /// Postpone a soon/info item; blocking items cannot be deferred.
+    Defer {
+        item_id: String,
+        /// RFC 3339 UTC instant to resume showing it (default: +1 hour).
+        #[arg(long)]
+        until: Option<String>,
+    },
+    /// Close an item with a reason.
+    Resolve {
+        item_id: String,
+        /// Why it no longer needs attention.
+        #[arg(long)]
+        reason: String,
+        /// Who resolved it.
+        #[arg(long, default_value = "human")]
+        by: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum ContextCommand {
     /// Compile a bounded packet for a task.
     Compile {
@@ -601,6 +649,27 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Status => status(&project),
         Command::Board => board_cmd::board(&project, cli.format),
         Command::Top { once, interval } => top_cmd::top(&project, once, interval, cli.format),
+        Command::Inbox {
+            command,
+            line,
+            check,
+            kind,
+            task,
+            all,
+            json,
+        } => inbox_cmd::inbox(
+            &project,
+            command,
+            inbox_cmd::InboxOpts {
+                line,
+                check,
+                kind,
+                task,
+                all,
+                json,
+            },
+            cli.format,
+        ),
         Command::Capability { command } => capability(&project, command, cli.format),
         Command::Route {
             command,

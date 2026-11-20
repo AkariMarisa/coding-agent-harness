@@ -1212,7 +1212,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [x] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。（2026-11-20；事件 + `.loom/inbox.json` 视图——`loom inbox` 展示随 §2.2 命令落地。）
 - [ ] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。
 - [ ] 人类命令在 TTY 下 stderr 出现一行 footer；`--json` stdout 不含 footer；非 TTY/CI 不打印；`LOOM_NO_INBOX=1` 可关闭。
-- [ ] `loom inbox` 同时显示问题与操作类事项；`loom inbox --check` 在存在 `blocking` 时退出 `2`；`ack` 不关闭事项，`defer` 只作用于 `soon/info`。
+- [x] `loom inbox` 同时显示问题与操作类事项；`loom inbox --check` 在存在 `blocking` 时退出 `2`；`ack` 不关闭事项，`defer` 只作用于 `soon/info`。（2026-11-21；所有 kind 均可渲染——`operation` 事项待下方 doctor/CI 来源接入后出现。）
 - [x] 脚本化 provider 调用 `ask` 工具 → `questions.json` → exit 2 → `loom answer` → 任务回到 `ready` 且下一个 packet 带上答案（2026-11-18；中间的 `loom inbox` 一环属已推迟的 §2.2 inbox）。
 - [ ] 同一条链路补上中间的 attention inbox：`task.needs_input` 开 `question` 事项，`loom answer` 关闭它。
 - [ ] 脚本化 provider 对同一 8KB 文件连续重写 5 次；无投影时 input 随步数复利增长，有投影时有界。

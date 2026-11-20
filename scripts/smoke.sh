@@ -222,6 +222,12 @@ grep -q '"kind": "question"' /work/.smoke/.loom/inbox.json || {
     echo "expected a question item in the inbox" >&2
     exit 1
 }
+# `loom inbox --check` gates scripts on blocking items (doc/15 §2.2).
+if loom inbox --check > /dev/null 2>&1; then
+    echo "expected loom inbox --check to exit 2 while blocking" >&2
+    exit 1
+fi
+loom inbox --line | grep -q '^\[!\] 1 blocking'
 
 # `loom top` is a read-only watcher (doc/15 §12.1): the needs_input task is
 # in flight until answered, and JSON always prints exactly one snapshot.

@@ -65,6 +65,13 @@ pub fn sync_inbox(project: &Project) -> Result<InboxFile> {
             retain_days: config.attention.retain_days,
         },
     );
+    if events.is_empty() && !inbox_path(project).exists() {
+        // A reader on a virgin directory must not materialize `.loom`
+        // (`loom inbox --line` runs from shell prompts). The fingerprint is
+        // still recorded so the first real event forces a replay+write.
+        inbox.source = fp;
+        return Ok(inbox);
+    }
     inbox.source = fp;
     write_inbox(project, &inbox)?;
     Ok(inbox)

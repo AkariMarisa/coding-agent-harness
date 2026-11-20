@@ -1213,7 +1213,7 @@ Notes:
 - [x] `task.needs_input` automatically opens a `question` attention item; `loom answer` resolves it automatically (2026-11-20; events + `.loom/inbox.json` view — the `loom inbox` display lands with §2.2's command).
 - [ ] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears.
 - [ ] On a TTY, human commands print one footer line on stderr; `--json` stdout contains no footer; nothing is printed for non-TTY/CI; `LOOM_NO_INBOX=1` turns it off.
-- [ ] `loom inbox` shows both question and operation items; `loom inbox --check` exits `2` when any `blocking` exists; `ack` does not close an item, `defer` applies only to `soon/info`.
+- [x] `loom inbox` shows both question and operation items; `loom inbox --check` exits `2` when any `blocking` exists; `ack` does not close an item, `defer` applies only to `soon/info` (2026-11-21; all kinds render — `operation` items appear once the doctor/CI sources below open them).
 - [x] A scripted provider calls the `ask` tool → `questions.json` → exit 2 → `loom answer` → the task returns to `ready` and the next packet carries the answer (2026-11-18; the `loom inbox` hop in the middle is the deferred §2.2 inbox).
 - [ ] The same chain with the attention inbox in the middle: `task.needs_input` opens a `question` item, `loom answer` resolves it.
 - [ ] A scripted provider rewrites the same 8KB file 5 times in a row; without projection, input compounds with step count; with projection, it is bounded.

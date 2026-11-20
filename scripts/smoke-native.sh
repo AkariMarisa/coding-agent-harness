@@ -149,6 +149,26 @@ loom task show T-20261106-003 | grep -q 'needs_input'
 grep -q '"blocking": 1' /work/.smoke-native/.loom/inbox.json
 grep -q '"task:T-20261106-003:question:Q1"' /work/.smoke-native/.loom/inbox.json
 
+# `loom inbox` lists it, gates scripts on it, and `ack` keeps it counting.
+loom inbox --format json | grep -q '"task:T-20261106-003:question:Q1"'
+loom inbox --line | grep -q '^\[!\] 1 blocking · 0 pending'
+if loom inbox --check > /dev/null 2>&1; then
+    echo "expected loom inbox --check to exit 2 while blocking" >&2
+    exit 1
+fi
+qid=$(loom inbox --format json | grep -o 'ATT-[0-9]*-[0-9]*' | head -1)
+test -n "$qid"
+loom inbox ack "$qid" > /dev/null
+if loom inbox --check > /dev/null 2>&1; then
+    echo "acked must still probe exit 2: reading never closes" >&2
+    exit 1
+fi
+loom inbox --kind question --format json | grep -q "$qid"
+if loom inbox --kind nope > /dev/null 2>&1; then
+    echo "expected an unknown --kind to fail" >&2
+    exit 1
+fi
+
 # Answering the blocking question emits task.answered → ready.
 loom answer T-20261106-003 -q Q1 -c A --rationale "keep the tree small" --format json \
     | grep -q '"status": "ready"'
@@ -157,6 +177,8 @@ loom task show T-20261106-003 | grep -q 'ready'
 # …and resolves the inbox item: nothing blocking is left.
 grep -q '"blocking": 0' /work/.smoke-native/.loom/inbox.json
 grep -q '"task:T-20261106-003:question:Q1"' /work/.smoke-native/.loom/inbox.json
+loom inbox --check
+loom inbox --line | grep -q '^\[ \] 0 blocking · 0 pending'
 
 # The next packet carries the answer (failure-pack channel).
 LOOM_NATIVE_SCRIPT=/work/.smoke-native/script-done.json \
