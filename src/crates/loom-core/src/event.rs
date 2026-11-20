@@ -52,6 +52,14 @@ pub enum EventType {
     HumanAborted,
     #[serde(rename = "run.finished")]
     RunFinished,
+    #[serde(rename = "attention.opened")]
+    AttentionOpened,
+    #[serde(rename = "attention.updated")]
+    AttentionUpdated,
+    #[serde(rename = "attention.resolved")]
+    AttentionResolved,
+    #[serde(rename = "attention.expired")]
+    AttentionExpired,
 }
 
 impl EventType {
@@ -79,8 +87,44 @@ impl EventType {
             Self::HumanApproved => "human.approved",
             Self::HumanAborted => "human.aborted",
             Self::RunFinished => "run.finished",
+            Self::AttentionOpened => "attention.opened",
+            Self::AttentionUpdated => "attention.updated",
+            Self::AttentionResolved => "attention.resolved",
+            Self::AttentionExpired => "attention.expired",
         }
     }
+
+    /// Every variant, in declaration order. Drift tests compare this against
+    /// `schemas/event.v1.json`'s `type.enum` so the two cannot diverge
+    /// silently (`doc/16` §drift).
+    pub const ALL: [EventType; 26] = [
+        Self::RunStarted,
+        Self::GoalLoaded,
+        Self::TaskCreated,
+        Self::TaskReady,
+        Self::TaskDispatched,
+        Self::TaskStarted,
+        Self::TaskReceipt,
+        Self::TaskVerify,
+        Self::TaskVerdict,
+        Self::TaskPassed,
+        Self::TaskFailed,
+        Self::TaskEscalated,
+        Self::TaskFallback,
+        Self::TaskMerged,
+        Self::TaskBlocked,
+        Self::TaskNeedsInput,
+        Self::TaskAnswered,
+        Self::BudgetWarning,
+        Self::BudgetExceeded,
+        Self::HumanApproved,
+        Self::HumanAborted,
+        Self::RunFinished,
+        Self::AttentionOpened,
+        Self::AttentionUpdated,
+        Self::AttentionResolved,
+        Self::AttentionExpired,
+    ];
 }
 
 impl FromStr for EventType {
@@ -110,6 +154,10 @@ impl FromStr for EventType {
             "human.approved" => Ok(Self::HumanApproved),
             "human.aborted" => Ok(Self::HumanAborted),
             "run.finished" => Ok(Self::RunFinished),
+            "attention.opened" => Ok(Self::AttentionOpened),
+            "attention.updated" => Ok(Self::AttentionUpdated),
+            "attention.resolved" => Ok(Self::AttentionResolved),
+            "attention.expired" => Ok(Self::AttentionExpired),
             other => Err(format!("unknown event type: {other}")),
         }
     }
@@ -270,29 +318,62 @@ mod tests {
 
     #[test]
     fn parses_all_documented_types() {
-        for name in [
-            "run.started",
-            "goal.loaded",
-            "task.created",
-            "task.ready",
-            "task.dispatched",
-            "task.started",
-            "task.receipt",
-            "task.verify",
-            "task.passed",
-            "task.failed",
-            "task.escalated",
-            "task.fallback",
-            "task.merged",
-            "task.blocked",
-            "budget.warning",
-            "budget.exceeded",
-            "human.approved",
-            "human.aborted",
-            "run.finished",
-        ] {
+        for name in EventType::ALL.iter().map(|e| e.as_str()) {
             let parsed = name.parse::<EventType>().expect(name);
             assert_eq!(parsed.as_str(), name);
+        }
+        // Every variant is in ALL exactly once (catches a new variant added
+        // to the enum but forgotten here).
+        let mut seen: Vec<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), EventType::ALL.len(), "duplicate in ALL");
+    }
+
+    /// The four-piece protocol rule (AGENTS.md §4): every `EventType` must
+    /// appear in `schemas/event.v1.json`'s `type.enum` and vice versa.
+    #[test]
+    fn schema_enum_matches_event_types() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../schemas/event.v1.json");
+        let raw = std::fs::read_to_string(&path).expect("schemas/event.v1.json readable");
+        let schema: Value = serde_json::from_str(&raw).expect("event schema parses");
+        let listed = schema
+            .get("properties")
+            .and_then(|p| p.get("type"))
+            .and_then(|t| t.get("enum"))
+            .and_then(|e| e.as_array())
+            .expect("event schema has properties.type.enum");
+        let from_schema: std::collections::HashSet<String> = listed
+            .iter()
+            .map(|v| v.as_str().expect("enum entries are strings").to_string())
+            .collect();
+        let from_code: std::collections::HashSet<String> = EventType::ALL
+            .iter()
+            .map(|e| e.as_str().to_string())
+            .collect();
+        assert_eq!(
+            from_schema, from_code,
+            "schemas/event.v1.json type.enum drifted from EventType::ALL"
+        );
+    }
+
+    #[test]
+    fn attention_events_are_project_level_and_stateless() {
+        // `attention.*` are project-level items: they must validate without a
+        // task_id (doc/16) and must never carry task state (doc/15 §2.2).
+        for event_type in [
+            EventType::AttentionOpened,
+            EventType::AttentionUpdated,
+            EventType::AttentionResolved,
+            EventType::AttentionExpired,
+        ] {
+            let event = Event::new("R-1", 1, event_type);
+            assert!(
+                event.validate().is_ok(),
+                "{} needs no task_id",
+                event_type.as_str()
+            );
         }
     }
 

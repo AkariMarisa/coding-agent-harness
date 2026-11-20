@@ -158,7 +158,11 @@ pub fn status_after_event(current: TaskStatus, event: EventType) -> TaskStatus {
         | EventType::BudgetWarning
         | EventType::BudgetExceeded
         | EventType::HumanApproved
-        | EventType::RunFinished => current,
+        | EventType::RunFinished
+        | EventType::AttentionOpened
+        | EventType::AttentionUpdated
+        | EventType::AttentionResolved
+        | EventType::AttentionExpired => current,
     }
 }
 

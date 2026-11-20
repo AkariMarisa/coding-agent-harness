@@ -681,6 +681,10 @@ Escalation is allowed only in the following situations:
 | `human.approved` | `by`, `scope` |
 | `human.aborted` | `by`, `reason` |
 | `run.finished` | `tasks`, `cost`, `cpvt` |
+| `attention.opened` | `item_id`, `kind` (`question`/`approval`/`operation`/`review`/`reminder`), `source` (`task`/`ci`/`skills`/`env`/`git`/`human`), `severity` (`blocking`/`soon`/`info`), `dedupe_key`, `title`; optional `detail`/`refs`/`actions`/`expires_at`. Project-level: `task_id` is optional. Opening a still-open `dedupe_key` only accumulates `occurrences`, it never floods the list |
+| `attention.updated` | `item_id`, `changes` (`severity`/`detail`/`defer_until`/`occurrences` as an absolute set/`status` limited to `acked`); updates without changing identity and never closes |
+| `attention.resolved` | `item_id`, `by`, `reason`, optional `assumption_id`; closes the item (`open`/`acked → resolved`) |
+| `attention.expired` | `item_id`, `policy`; ignored for `blocking` items other than `reminder` — an irreversible item never silently expires |
 
 ### 11.3 Write Rules
 
@@ -689,6 +693,7 @@ Escalation is allowed only in the following situations:
 - Every event has a `run_id`; tasks spanning runs use `parent_run_id`.
 - Sensitive fields are redacted before writing.
 - Task state is derived by replaying events (`loom-core::status_after_event`): `task.created→pending`, `task.ready→ready`, `task.dispatched→dispatched`, `task.started→running`, `task.receipt→receipt`, `task.passed→passed`, `task.failed→failed`, `task.blocked→blocked`, `task.needs_input→needs_input`, `task.escalated→escalated`, `task.merged→merged`, `human.aborted→cancelled`; `task.verify` / `task.verdict` / `task.fallback` / budget events do not change state; `task.answered` changes it only from `needs_input` (to `ready`), never backwards from a later state. `needs_input` / `blocked` are not failures: they can be dispatched again, and they **do not count** toward M3's `task.failed` escalation count; only an acceptance failure or an explicit adapter failure writes `task.failed`. `tasks.json` is just a view of this replay result.
+- `attention.*` change **no** task state: they are written in step with task events but feed a separate projector (`loom-core::reduce_inbox` → `.loom/inbox.json`, [15](15-agent-runtime-governance-and-engineering.md) §2.2). Task state answers "what is the work doing"; the inbox answers "what does a human need to see" — neither is derived from the other.
 - `task.fallback` means a **same-tier model switch and rerun**: the `run_id` is the run of the new attempt, and `parent_run_id` points to the failed run; `attempt` does not change, so the escalation threshold (counting `task.failed`) is not polluted by the switch. Cross-tier model switches are triggered only by escalation, never by fallback.
 - Dependencies are considered satisfied only after `passed` / `merged`; circular dependencies and cross-goal dependencies are rejected when the index is written.
 

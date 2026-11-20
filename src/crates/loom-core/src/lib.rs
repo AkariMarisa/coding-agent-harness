@@ -2,6 +2,7 @@
 //!
 //! This crate intentionally stays free of filesystem and process I/O.
 
+mod attention;
 mod capability;
 mod config;
 mod envelope;
@@ -16,6 +17,12 @@ mod time;
 mod usage;
 mod verdict;
 
+pub use attention::{
+    next_attention_id, reduce_inbox, sanitize_detail, sanitize_title, AttentionAction,
+    AttentionChanges, AttentionItem, AttentionKind, AttentionSource, EventsFingerprint,
+    InboxCounts, InboxFile, ItemStatus, ReduceOpts, Severity, ACTIONS_MAX, DETAIL_MAX,
+    INBOX_VERSION, REFS_MAX, REF_MAX, TITLE_MAX,
+};
 pub use capability::{find_model, ModelCapability, ReasoningPassthrough, ThinkingMode, Tier, Wire};
 pub use config::{
     apply_config_set, parse_config_value, Config, ConfigError, ParallelConfig, ToolsConfig,

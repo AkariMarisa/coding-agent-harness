@@ -33,7 +33,11 @@
         "budget.exceeded",
         "human.approved",
         "human.aborted",
-        "run.finished"
+        "run.finished",
+        "attention.opened",
+        "attention.updated",
+        "attention.resolved",
+        "attention.expired"
       ]
     },
     "attempt": {"type": "integer", "minimum": 1},

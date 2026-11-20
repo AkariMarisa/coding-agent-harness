@@ -681,6 +681,10 @@ runner 为每条 acceptance 记录：
 | `human.approved` | `by`, `scope` |
 | `human.aborted` | `by`, `reason` |
 | `run.finished` | `tasks`, `cost`, `cpvt` |
+| `attention.opened` | `item_id`、`kind`（`question`/`approval`/`operation`/`review`/`reminder`）、`source`（`task`/`ci`/`skills`/`env`/`git`/`human`）、`severity`（`blocking`/`soon`/`info`）、`dedupe_key`、`title`；可选 `detail`/`refs`/`actions`/`expires_at`。项目级事件：`task_id` 可选。对仍处于打开状态的同一 `dedupe_key` 再次打开只累加 `occurrences`，绝不刷屏 |
+| `attention.updated` | `item_id`、`changes`（`severity`/`detail`/`defer_until`/`occurrences` 为绝对值置入/`status` 仅限 `acked`）；不改身份、绝不关闭 |
+| `attention.resolved` | `item_id`、`by`、`reason`、可选 `assumption_id`；关闭条目（`open`/`acked → resolved`） |
+| `attention.expired` | `item_id`、`policy`；对 `reminder` 以外的 `blocking` 条目被忽略——不可逆条目绝不静默过期 |
 
 ### 11.3 写入规则
 
@@ -689,6 +693,7 @@ runner 为每条 acceptance 记录：
 - 每个事件有 `run_id`；跨 run 的任务用 `parent_run_id`。
 - 敏感字段脱敏后再写。
 - 任务状态由事件重放得出（`loom-core::status_after_event`）：`task.created→pending`、`task.ready→ready`、`task.dispatched→dispatched`、`task.started→running`、`task.receipt→receipt`、`task.passed→passed`、`task.failed→failed`、`task.blocked→blocked`、`task.needs_input→needs_input`、`task.escalated→escalated`、`task.merged→merged`、`human.aborted→cancelled`；`task.verify` / `task.verdict` / `task.fallback` / 预算事件不改状态；`task.answered` 只从 `needs_input` 改状态（变为 `ready`），绝不会把更晚的状态往回拉。`needs_input` / `blocked` 不是失败：它们可被再次 dispatch，且**不计入** M3 的 `task.failed` 升级计数；只有验收失败或 adapter 明确失败才写 `task.failed`。`tasks.json` 只是这个重放结果的视图。
+- `attention.*` **不**改任何任务状态：它与任务事件同步写入，但喂给另一个投影器（`loom-core::reduce_inbox` → `.loom/inbox.json`，[15](15-agent-runtime-governance-and-engineering.zh-CN.md) §2.2）。任务状态回答"工作在干什么"，收件箱回答"人现在需要看什么"——两者互不推导。
 - `task.fallback` 表示**同层换模型重跑**：`run_id` 是新 attempt 的 run，`parent_run_id` 指向失败的 run；`attempt` 不变，所以升级阈值（数 `task.failed`）不会被切换污染。跨层换模型只由升级触发，不由 fallback 触发。
 - 依赖只在 `passed` / `merged` 后视为满足；循环依赖与跨 goal 依赖在写入索引时拒绝。
 
