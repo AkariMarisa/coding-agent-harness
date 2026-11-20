@@ -2,6 +2,7 @@
 
 mod artifact;
 mod events;
+mod inbox;
 mod ledger;
 mod locks;
 mod project;
@@ -12,6 +13,10 @@ mod telemetry;
 
 pub use artifact::{read_artifact, write_artifact};
 pub use events::{append_event, events_path, read_events};
+pub use inbox::{
+    inbox_path, open_item, read_inbox, read_inbox_lenient, resolve_item, resolve_question_items,
+    sync_inbox, update_item, NewItem,
+};
 pub use ledger::{aggregate_usage, append_usage, ledger_path, read_usage};
 pub use locks::{
     live_lock_owners, lock_file_name, locks_dir, read_locks, reclaim_stale_locks, LockConflict,

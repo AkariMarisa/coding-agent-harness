@@ -21,6 +21,8 @@ pub struct Config {
     pub routing: RoutingConfig,
     /// How many tasks may hold path locks (i.e. actually run) at once.
     pub parallel: ParallelConfig,
+    /// Resident attention inbox (`doc/15` §2.2).
+    pub attention: AttentionConfig,
 }
 
 /// M4 starts at 2 parallel workers; 3+ needs an A/B showing WPT/CPVT do not
@@ -51,6 +53,35 @@ impl Default for Config {
             models: Vec::new(),
             routing: RoutingConfig::default(),
             parallel: ParallelConfig::default(),
+            attention: AttentionConfig::default(),
+        }
+    }
+}
+
+/// `[attention]` knobs for the resident inbox (`doc/15` §2.2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AttentionConfig {
+    /// Footer of human commands: `tty` (stderr is a terminal), `always`, `off`.
+    pub footer: String,
+    /// Whether inbox counts may enter the model packet. Only `off` is wired
+    /// in v1; `counts` is reserved by the design (`doc/15` §2.2) — the inbox
+    /// stays out of model context by default either way.
+    pub include_in_packet: String,
+    /// Repeats of the same open `dedupe_key` inside this window are not
+    /// counted again; 0 disables the cooldown.
+    pub dedupe_cooldown_s: u64,
+    /// Days a resolved/expired item stays in the view (events are forever).
+    pub retain_days: i64,
+}
+
+impl Default for AttentionConfig {
+    fn default() -> Self {
+        Self {
+            footer: "tty".to_string(),
+            include_in_packet: "off".to_string(),
+            dedupe_cooldown_s: 600,
+            retain_days: 7,
         }
     }
 }
@@ -114,6 +145,27 @@ impl Config {
         {
             return Err(ConfigError::Validation(
                 "parallel.max_inflight_cost_usd must be finite and >= 0".to_string(),
+            ));
+        }
+        match self.attention.footer.as_str() {
+            "tty" | "always" | "off" => {}
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "attention.footer must be tty|always|off, got {other}"
+                )));
+            }
+        }
+        match self.attention.include_in_packet.as_str() {
+            "off" | "counts" => {}
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "attention.include_in_packet must be off|counts, got {other}"
+                )));
+            }
+        }
+        if !(0..=90).contains(&self.attention.retain_days) {
+            return Err(ConfigError::Validation(
+                "attention.retain_days must be 0..=90".to_string(),
             ));
         }
         Ok(())
@@ -595,6 +647,34 @@ base_url = "https://b.example"
             toml::from_str::<Config>(&bad_enum).is_err(),
             "bad enum must not parse"
         );
+    }
+
+    #[test]
+    fn attention_section_parses_and_rejects_typos() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "[attention]\nfooter = \"off\"\ndedupe_cooldown_s = 0\nretain_days = 3\n",
+        )
+        .expect("write");
+        let config = Config::load(&path).expect("load");
+        assert_eq!(config.attention.footer, "off");
+        assert_eq!(config.attention.dedupe_cooldown_s, 0);
+        assert_eq!(config.attention.retain_days, 3);
+
+        fs::write(&path, "[attention]\nfooter = \"alwyas\"\n").expect("write");
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Validation(_))
+        ));
+        fs::write(&path, "[attention]\nfooterr = \"off\"\n").expect("write");
+        assert!(toml::from_str::<Config>(&fs::read_to_string(&path).expect("read")).is_err());
+        fs::write(&path, "[attention]\nretain_days = 365\n").expect("write");
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Validation(_))
+        ));
     }
 
     #[test]

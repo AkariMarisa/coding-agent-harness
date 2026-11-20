@@ -145,11 +145,18 @@ loom event list --task T-20261106-003 | grep -q 'task.needs_input'
 loom event list --task T-20261106-003 | grep -q 'question_ids'
 loom task show T-20261106-003 | grep -q 'needs_input'
 
+# The question is now a resident inbox item (doc/15 §2.2), keyed per question.
+grep -q '"blocking": 1' /work/.smoke-native/.loom/inbox.json
+grep -q '"task:T-20261106-003:question:Q1"' /work/.smoke-native/.loom/inbox.json
+
 # Answering the blocking question emits task.answered → ready.
 loom answer T-20261106-003 -q Q1 -c A --rationale "keep the tree small" --format json \
     | grep -q '"status": "ready"'
 loom event list --task T-20261106-003 | grep -q 'task.answered'
 loom task show T-20261106-003 | grep -q 'ready'
+# …and resolves the inbox item: nothing blocking is left.
+grep -q '"blocking": 0' /work/.smoke-native/.loom/inbox.json
+grep -q '"task:T-20261106-003:question:Q1"' /work/.smoke-native/.loom/inbox.json
 
 # The next packet carries the answer (failure-pack channel).
 LOOM_NATIVE_SCRIPT=/work/.smoke-native/script-done.json \

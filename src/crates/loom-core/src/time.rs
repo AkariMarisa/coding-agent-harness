@@ -64,6 +64,60 @@ pub fn compact_utc(ts_ms: u64) -> String {
     format!("{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}")
 }
 
+/// Parse the exact format produced by [`rfc3339_ms`] back to epoch millis.
+///
+/// Used for cooldown/retention arithmetic on stamps Loom itself wrote; any
+/// other shape returns `None` instead of guessing.
+pub fn parse_rfc3339_ms(stamp: &str) -> Option<u64> {
+    // YYYY-MM-DDTHH:MM:SS.mmmZ — fixed width, fixed separators.
+    if stamp.len() != 24 {
+        return None;
+    }
+    let year: i64 = stamp.get(0..4)?.parse().ok()?;
+    if stamp.as_bytes()[4] != b'-' {
+        return None;
+    }
+    let month: i64 = stamp.get(5..7)?.parse().ok()?;
+    if stamp.as_bytes()[7] != b'-' {
+        return None;
+    }
+    let day: i64 = stamp.get(8..10)?.parse().ok()?;
+    if stamp.as_bytes()[10] != b'T' {
+        return None;
+    }
+    let hour: u64 = stamp.get(11..13)?.parse().ok()?;
+    if stamp.as_bytes()[13] != b':' {
+        return None;
+    }
+    let minute: u64 = stamp.get(14..16)?.parse().ok()?;
+    if stamp.as_bytes()[16] != b':' {
+        return None;
+    }
+    let second: u64 = stamp.get(17..19)?.parse().ok()?;
+    if stamp.as_bytes()[19] != b'.' {
+        return None;
+    }
+    let millis: u64 = stamp.get(20..23)?.parse().ok()?;
+    if stamp.as_bytes()[23] != b'Z' {
+        return None;
+    }
+    // `days_from_civil` is a permissive algorithm (month 13 rolls over), so
+    // ranges are validated here to keep the parser honest.
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    if days < 0 {
+        return None;
+    }
+    Some(days as u64 * 86_400_000 + (hour * 3600 + minute * 60 + second) * 1000 + millis)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +127,22 @@ mod tests {
         assert_eq!(rfc3339_ms(0), "1970-01-01T00:00:00.000Z");
         assert_eq!(rfc3339_ms(1_793_784_062_000), "2026-11-04T09:21:02.000Z");
         assert_eq!(compact_utc(1_793_784_062_000), "20261104-092102");
+    }
+
+    #[test]
+    fn roundtrips_rfc3339_parse() {
+        for ts in [0_u64, 1_793_784_062_000, 1_795_180_800_123] {
+            assert_eq!(parse_rfc3339_ms(&rfc3339_ms(ts)), Some(ts), "ts {ts}");
+        }
+        for bad in [
+            "",
+            "not-a-stamp",
+            "2026-11-04T09:21:02Z",
+            "2026-11-04 09:21:02.000Z",
+            "2026-13-40T09:21:02.000Z",
+        ] {
+            assert_eq!(parse_rfc3339_ms(bad), None, "bad {bad:?}");
+        }
     }
 
     #[test]

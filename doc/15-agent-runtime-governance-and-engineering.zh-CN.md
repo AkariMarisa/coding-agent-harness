@@ -537,7 +537,7 @@ adapter 需要输入时：
 - `attempt` 不变（提问不是失败），另记 `question_round`；
 - 失败包只带未回答问题，不带已答问题。
 
-`loom answer` 写 `.loom/answers/<task>.json` 并发出 `task.answered`；**仅当没有 blocking 问题悬而未决时**才把任务送回 `ready`——在 blocking 仍开着时回答可选问题，只记录选择、任务留在 `needs_input`。答案按 `(question_id, run_id)` 配对，因为问题 id 每轮都从 `Q1` 重新开始。按 `recommended`/`default` 批量回答的 `--choice`、以及回答时写 `attention.resolved`，尚未实现（inbox 属 §2.2，已推迟——见上方状态注记声明的偏差）。
+`loom answer` 写 `.loom/answers/<task>.json` 并发出 `task.answered`；**仅当没有 blocking 问题悬而未决时**才把任务送回 `ready`——在 blocking 仍开着时回答可选问题，只记录选择、任务留在 `needs_input`。答案按 `(question_id, run_id)` 配对，因为问题 id 每轮都从 `Q1` 重新开始。按 `recommended`/`default` 批量回答的 `--choice` 尚未实现。自 2026-11-20 起，每道被回答的问题都会同步 resolve 其 §2.2 收件箱事项（`attention.resolved`），无论 `task.answered` 是否发出。
 
 ### 2.7 假设账本
 
@@ -1209,7 +1209,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；v1 不据此跳过服务器 job。
 - [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。
-- [ ] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。
+- [x] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。（2026-11-20；事件 + `.loom/inbox.json` 视图——`loom inbox` 展示随 §2.2 命令落地。）
 - [ ] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。
 - [ ] 人类命令在 TTY 下 stderr 出现一行 footer；`--json` stdout 不含 footer；非 TTY/CI 不打印；`LOOM_NO_INBOX=1` 可关闭。
 - [ ] `loom inbox` 同时显示问题与操作类事项；`loom inbox --check` 在存在 `blocking` 时退出 `2`；`ack` 不关闭事项，`defer` 只作用于 `soon/info`。

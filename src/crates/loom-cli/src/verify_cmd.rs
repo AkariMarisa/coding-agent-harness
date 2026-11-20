@@ -6,8 +6,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
-use loom_core::{EventType, Receipt, ReceiptStatus, TokenTotals, VerifyEvidence, VerifyResult};
-use loom_store::{append_event, now_ms, read_task, sync_index, Run};
+use loom_core::{
+    AttentionAction, AttentionKind, AttentionSource, EventType, Receipt, ReceiptStatus, Severity,
+    TokenTotals, VerifyEvidence, VerifyResult,
+};
+use loom_store::{
+    append_event, now_ms, open_item, read_task, sync_inbox, sync_index, NewItem, Run,
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -439,7 +444,60 @@ pub(crate) fn run_verify(
                             json!(questions.questions.iter().any(|question| question.blocking)),
                         ),
                     ]),
-            )?
+            )?;
+            // doc/15 §2.2: every question becomes a resident inbox item, so
+            // "what needs me" survives past this conversation.
+            if questions.questions.is_empty() {
+                // Older ask without a questions file: one generic blocking
+                // item instead of silence.
+                open_item(
+                    project,
+                    &NewItem {
+                        run_id: run.id.clone(),
+                        task_id: Some(task_id.to_string()),
+                        kind: AttentionKind::Question,
+                        source: AttentionSource::Task,
+                        severity: Severity::Blocking,
+                        dedupe_key: format!("task:{task_id}:needs_input"),
+                        title: format!("task {task_id} needs input"),
+                        detail: Some(
+                            "adapter returned needs_input without questions.json".to_string(),
+                        ),
+                        refs: Vec::new(),
+                        actions: vec![AttentionAction {
+                            id: "show".to_string(),
+                            label: "Show task".to_string(),
+                            cmd: format!("loom task show {task_id}"),
+                        }],
+                    },
+                )?;
+            } else {
+                for question in &questions.questions {
+                    open_item(
+                        project,
+                        &NewItem {
+                            run_id: run.id.clone(),
+                            task_id: Some(task_id.to_string()),
+                            kind: AttentionKind::Question,
+                            source: AttentionSource::Task,
+                            severity: if question.blocking {
+                                Severity::Blocking
+                            } else {
+                                Severity::Soon
+                            },
+                            dedupe_key: format!("task:{task_id}:question:{}", question.id),
+                            title: question.question.clone(),
+                            detail: question.why_now.clone(),
+                            refs: question.evidence.clone(),
+                            actions: vec![AttentionAction {
+                                id: "answer".to_string(),
+                                label: "Answer".to_string(),
+                                cmd: format!("loom answer {task_id} -q {}", question.id),
+                            }],
+                        },
+                    )?;
+                }
+            }
         }
         ReceiptStatus::Blocked | ReceiptStatus::BudgetExceeded => append_event(
             project,
@@ -470,6 +528,8 @@ pub(crate) fn run_verify(
         }
     }
     sync_index(project)?;
+    // Keep the resident view in step with any attention events written above.
+    sync_inbox(project)?;
 
     let receipt_path = run.receipt_path();
     Ok(VerifyOutcome {

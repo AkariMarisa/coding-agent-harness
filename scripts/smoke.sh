@@ -212,6 +212,16 @@ loom board --format json | grep -q '"T-20261106-004"' || {
     echo "expected needs_input task on the board" >&2
     exit 1
 }
+# task.needs_input opens a resident question item (doc/15 §2.2), generic or
+# per-question — either way the view records one blocking todo.
+grep -q '"blocking": 1' /work/.smoke/.loom/inbox.json || {
+    echo "expected one blocking inbox item after needs_input" >&2
+    exit 1
+}
+grep -q '"kind": "question"' /work/.smoke/.loom/inbox.json || {
+    echo "expected a question item in the inbox" >&2
+    exit 1
+}
 
 # `loom top` is a read-only watcher (doc/15 §12.1): the needs_input task is
 # in flight until answered, and JSON always prints exactly one snapshot.

@@ -538,7 +538,7 @@ Next `dispatch` / `resume`:
 - `attempt` does not change (asking is not a failure), and `question_round` is recorded separately;
 - the failure packet carries only unanswered questions, never answered ones.
 
-`loom answer` writes `.loom/answers/<task>.json` and emits `task.answered`; it moves the task back to `ready` only once **no blocking question stays open** — an answer to an optional question while a blocking one is outstanding records the choice but leaves the task in `needs_input`. Answers pair by `(question_id, run_id)` because question ids restart at `Q1` every run. `--choice` batch-answering from `recommended`/`default`, and `attention.resolved` on answer, are not implemented yet (the inbox is §2.2, deferred — declared deviation in the status note above).
+`loom answer` writes `.loom/answers/<task>.json` and emits `task.answered`; it moves the task back to `ready` only once **no blocking question stays open** — an answer to an optional question while a blocking one is outstanding records the choice but leaves the task in `needs_input`. Answers pair by `(question_id, run_id)` because question ids restart at `Q1` every run. `--choice` batch-answering from `recommended`/`default` is not implemented yet. Since 2026-11-20 every answered question also resolves its §2.2 inbox item (`attention.resolved`), whether or not `task.answered` fires.
 
 ### 2.7 Assumption ledger
 
@@ -1210,7 +1210,7 @@ Notes:
 - [ ] The report/attestation contains tree, argv, tool versions, exit codes; verification passes for the same tree and fails for a different tree; v1 does not skip server jobs on that basis.
 - [ ] The review job has token/time limits, is advisory by default, produces structured findings, and has no network; `kind=skill` can only load skills in the lock that passed static checks.
 - [ ] A `needs_input` receipt after `loom verify` has status `needs_input`, **produces no `task.failed`**, and does not raise the escalation count.
-- [ ] `task.needs_input` automatically opens a `question` attention item; `loom answer` resolves it automatically.
+- [x] `task.needs_input` automatically opens a `question` attention item; `loom answer` resolves it automatically (2026-11-20; events + `.loom/inbox.json` view — the `loom inbox` display lands with §2.2's command).
 - [ ] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears.
 - [ ] On a TTY, human commands print one footer line on stderr; `--json` stdout contains no footer; nothing is printed for non-TTY/CI; `LOOM_NO_INBOX=1` turns it off.
 - [ ] `loom inbox` shows both question and operation items; `loom inbox --check` exits `2` when any `blocking` exists; `ack` does not close an item, `defer` applies only to `soon/info`.

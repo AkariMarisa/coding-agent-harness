@@ -12,7 +12,10 @@ use anyhow::{bail, Context as _, Result};
 use loom_core::{
     status_after_event, Answer, AnswersFile, EventType, QuestionsFile, TaskStatus, ANSWERS_VERSION,
 };
-use loom_store::{append_event, now_ms, read_task, sync_index, task_status, Project};
+use loom_store::{
+    append_event, now_ms, read_task, resolve_question_items, sync_inbox, sync_index, task_status,
+    Project,
+};
 use serde_json::json;
 
 use super::run_util::find_run_for_task;
@@ -118,6 +121,11 @@ pub fn answer(
     let text = serde_json::to_string_pretty(&answers).context("serialize answers")?;
     fs::write(&answers_path, format!("{text}\n"))
         .with_context(|| format!("write {}", project.relative(&answers_path)))?;
+
+    // doc/15 §2.2: each answered question leaves the resident inbox — even
+    // when a blocking sibling keeps the task in `needs_input`.
+    resolve_question_items(project, &run_id, task_id, question_ids, by)?;
+    sync_inbox(project)?;
 
     // Blocking questions gate the resume: while one is open the task stays
     // `needs_input`, and only the last answer emits `task.answered`.
