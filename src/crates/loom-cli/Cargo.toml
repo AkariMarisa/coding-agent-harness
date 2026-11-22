@@ -12,6 +12,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 loom-adapter = { path = "../loom-adapter" }
+loom-ci = { path = "../loom-ci" }
 loom-context = { path = "../loom-context" }
 loom-core = { path = "../loom-core" }
 loom-native = { path = "../loom-native" }

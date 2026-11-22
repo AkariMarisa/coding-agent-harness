@@ -531,4 +531,40 @@ if loom inbox --check > /dev/null 2>&1; then
     exit 1
 fi
 
+# --- local CI: stack detection and plan (doc/16 §7.5/§7.6) ---
+# No recognizable stack at the root yet: plan suggests nothing, exits 2
+# ("needs human handling") and never writes a configuration.
+if loom ci plan > /dev/null 2>&1; then
+    echo "expected loom ci plan to exit 2 without stack evidence" >&2
+    exit 1
+fi
+test ! -f /work/.smoke/.loom.ci.toml || {
+    echo "plan must not write .loom.ci.toml" >&2
+    exit 1
+}
+mkdir -p /work/.smoke/scripts
+printf '[package]\nname = "fixture"\nversion = "0.1.0"\n' > /work/.smoke/Cargo.toml
+printf '#!/bin/sh\nexec "$@"\n' > /work/.smoke/scripts/dev.sh
+chmod +x /work/.smoke/scripts/dev.sh
+loom ci plan --json | grep -q '"sufficient": true' || {
+    echo "expected plan to detect the Rust fixture" >&2
+    exit 1
+}
+loom ci plan --json | grep -q '"./scripts/dev.sh"' || {
+    echo "expected scripts/dev.sh to become the runner" >&2
+    exit 1
+}
+loom ci plan | grep -q 'clippy' || {
+    echo "expected a clippy job in the pretty plan" >&2
+    exit 1
+}
+loom ci plan --profile fast --json | grep -q '"fmt"' || {
+    echo "expected --profile fast to list its jobs" >&2
+    exit 1
+}
+test ! -f /work/.smoke/.loom.ci.toml || {
+    echo "plan must stay read-only even with evidence" >&2
+    exit 1
+}
+
 echo "SMOKE_OK"

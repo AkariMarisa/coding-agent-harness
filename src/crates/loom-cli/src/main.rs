@@ -23,6 +23,7 @@ mod adapter_cmd;
 mod answer_cmd;
 mod board_cmd;
 mod churn_cmd;
+mod ci_cmd;
 mod config_cmd;
 mod context_cmd;
 mod dispatch_cmd;
@@ -117,6 +118,11 @@ enum Command {
     Status,
     /// Show tasks grouped by status, plus running/lock counts.
     Board,
+    /// Local CI: detect, plan, run and diagnose repo checks (doc/16 §7).
+    Ci {
+        #[command(subcommand)]
+        command: CiCommand,
+    },
     /// Watch in-flight runs: phase, progress, tokens, latency (doc/15 §12.1).
     Top {
         /// Print one snapshot and exit (always the case for --format json).
@@ -407,6 +413,19 @@ enum EventCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum CiCommand {
+    /// Detect the stack and print suggested jobs with evidence.
+    Plan {
+        /// Only this profile's jobs, in execution order.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Alias for --format json.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum InboxCommand {
     /// Mark an item as seen; it stays open and keeps counting.
     Ack { item_id: String },
@@ -651,6 +670,7 @@ fn run(cli: Cli) -> Result<i32> {
         },
         Command::Status => status(&project),
         Command::Board => board_cmd::board(&project, cli.format),
+        Command::Ci { command } => ci_cmd::ci(&project, command, cli.format),
         Command::Top { once, interval } => top_cmd::top(&project, once, interval, cli.format),
         Command::Inbox {
             command,
