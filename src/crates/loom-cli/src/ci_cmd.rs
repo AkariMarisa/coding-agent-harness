@@ -19,6 +19,9 @@ pub fn ci(project: &loom_store::Project, command: CiCommand, format: Format) -> 
             fix,
             json,
         } => run_profile(project, profile.as_deref(), keep_going, fix, json, format),
+        CiCommand::Doctor { json } => doctor(project, json, format),
+        CiCommand::Report { run_id, json } => report(project, run_id.as_deref(), json, format),
+        CiCommand::VerifyAttest { path, json } => verify_attest(project, &path, json, format),
     }
 }
 
@@ -198,10 +201,22 @@ fn plan(
     json: bool,
     format: Format,
 ) -> Result<i32> {
-    let detection = detect(&project.root);
+    let mut detection = detect(&project.root);
+    // An existing tracked configuration wins over fresh suggestions: plan
+    // must show what will actually run (`doc/16` §7.6 keeps the file by
+    // default; detection alone would drift from the committed policy).
+    if let Some(file) =
+        loom_ci::load_ci_file(&project.root).map_err(|error| anyhow::anyhow!(error))?
+    {
+        detection.file = Some(file);
+        detection.sufficient = true;
+        detection.notes.push(format!(
+            "existing {CI_CONFIG_NAME} shown; detection suggestions ignored"
+        ));
+    }
 
     if let Some(profile) = profile {
-        // A profile filter only makes sense against a generated file; asking
+        // A profile filter only makes sense against a file to run; asking
         // for one when there is nothing to filter is a configuration error.
         let file = detection.file.as_ref().ok_or_else(|| {
             anyhow::anyhow!("no {CI_CONFIG_NAME}: insufficient evidence, nothing to filter")
@@ -241,7 +256,7 @@ fn plan(
     Ok(if detection.sufficient { 0 } else { 2 })
 }
 
-fn render_pretty(detection: &Detection) -> String {
+pub(crate) fn render_pretty(detection: &Detection) -> String {
     let mut out = String::new();
     out.push_str("stack evidence:\n");
     if detection.evidence.is_empty() {
@@ -278,6 +293,215 @@ fn render_pretty(detection: &Detection) -> String {
         }
     }
     out
+}
+
+/// `loom ci doctor`: toolchain, config, and last-run diagnosis. Advisory —
+/// it prints problems and exits 2 when a human is needed, never 4.
+fn doctor(project: &loom_store::Project, json: bool, format: Format) -> Result<i32> {
+    let mut missing: Vec<String> = Vec::new();
+    let mut config_error: Option<String> = None;
+    let mut config_info: Option<serde_json::Value> = None;
+
+    // A broken config is a diagnosis, not a crash: doctor reports it.
+    match loom_ci::load_ci_file(&project.root) {
+        Err(error) => config_error = Some(error),
+        Ok(None) => {
+            config_error = Some(format!("{CI_CONFIG_NAME} not found — run `loom init`"));
+        }
+        Ok(Some(file)) => {
+            let runner = file.runner.as_ref().map(|runner| runner.argv.clone());
+            for job in &file.jobs {
+                if let Some(tool) =
+                    loom_ci::missing_tool(runner.as_deref(), &job.argv[0], &job.required_tools)
+                {
+                    if !missing.contains(&tool) {
+                        missing.push(tool);
+                    }
+                }
+            }
+            config_info = Some(serde_json::json!({
+                "path": CI_CONFIG_NAME,
+                "jobs": file.jobs.len(),
+                "profiles": file.profiles.len(),
+                "runner": runner,
+            }));
+        }
+    }
+
+    let detection = detect(&project.root);
+    let last_run = latest_report(&project.loom_dir().join("ci"));
+    let ok = config_error.is_none() && missing.is_empty();
+
+    if json || matches!(format, Format::Json) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "v": 1,
+                "ok": ok,
+                "config": config_info,
+                "config_error": config_error,
+                "stack": detection.evidence,
+                "missing_tools": missing,
+                "last_run": last_run,
+                "hooks": "not_installed",
+            }))?
+        );
+    } else {
+        match (&config_info, &config_error) {
+            (Some(info), _) => println!(
+                "config:   {} — {} jobs, {} profiles, runner {}",
+                info["path"],
+                info["jobs"],
+                info["profiles"],
+                info["runner"]
+                    .as_array()
+                    .map(|argv| argv
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "))
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or_else(|| "(none, jobs run directly)".to_string())
+            ),
+            (None, Some(error)) => println!("config:   {error}"),
+            (None, None) => println!("config:   missing"),
+        }
+        if missing.is_empty() && config_info.is_some() {
+            println!("tools:    all present");
+        } else if !missing.is_empty() {
+            println!("tools:    missing: {}", missing.join(", "));
+        }
+        for item in &detection.evidence {
+            println!("stack:    {} — {}", item.path, item.detail);
+        }
+        match &last_run {
+            Some(run) => println!(
+                "last run: {} {} ok={} ({}ms)",
+                run["run_id"].as_str().unwrap_or("?"),
+                run["profile"].as_str().unwrap_or("?"),
+                run["ok"],
+                run["duration_ms"].as_u64().unwrap_or(0)
+            ),
+            None => println!("last run: none yet"),
+        }
+        println!("hooks:    not installed — `loom ci install-hooks` lands with the hooks phase");
+    }
+    // Exit 2 = needs human handling (missing config or tools), per §7.5.
+    Ok(if ok { 0 } else { 2 })
+}
+
+/// `loom ci report [run-id]`: the latest run by default. The run id is
+/// positional because the global `--run` flag already exists (`doc/16` §7.5
+/// spells it `--run <id>`; the flag name is taken).
+fn report(
+    project: &loom_store::Project,
+    run_id: Option<&str>,
+    json: bool,
+    format: Format,
+) -> Result<i32> {
+    let ci_dir = project.loom_dir().join("ci");
+    let dir = match run_id {
+        Some(id) => ci_dir.join(id),
+        None => latest_report_dir(&ci_dir)
+            .ok_or_else(|| anyhow::anyhow!("no CI runs yet — `loom ci run` first"))?,
+    };
+    let path = dir.join("report.json");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+
+    if json || matches!(format, Format::Json) {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(0);
+    }
+
+    println!(
+        "run:      {} profile={} ok={}",
+        value["run_id"].as_str().unwrap_or("?"),
+        value["profile"].as_str().unwrap_or("?"),
+        value["ok"]
+    );
+    println!(
+        "tree:     head={} dirty={}",
+        value["tree"]["head"].as_str().unwrap_or("none"),
+        value["tree"]["dirty"]
+    );
+    if let Some(tool) = value["missing_tool"].as_str() {
+        println!("missing:  {tool}");
+    }
+    println!("jobs:");
+    if let Some(jobs) = value["jobs"].as_array() {
+        for job in jobs {
+            println!(
+                "  {:<12} exit={:<5} {:>6}ms  {}",
+                job["id"].as_str().unwrap_or("?"),
+                job["exit"]
+                    .as_i64()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "signal".to_string()),
+                job["duration_ms"].as_u64().unwrap_or(0),
+                job["log_path"].as_str().unwrap_or("")
+            );
+        }
+    }
+    println!(
+        "report:   {}",
+        path.strip_prefix(&project.root).unwrap_or(&path).display()
+    );
+    Ok(0)
+}
+
+/// `loom ci verify-attest <path>`: prove the file matches this tree —
+/// nothing more (unsigned evidence, `doc/16` §7.8).
+fn verify_attest(
+    project: &loom_store::Project,
+    path: &str,
+    json: bool,
+    format: Format,
+) -> Result<i32> {
+    let candidate = std::path::Path::new(path);
+    let resolved = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        project.root.join(candidate)
+    };
+    let outcome = loom_ci::verify_attestation(&project.root, &resolved)
+        .map_err(|error| anyhow::anyhow!(error))?;
+
+    if json || matches!(format, Format::Json) {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    } else if outcome.ok {
+        println!(
+            "verified: {} matches this tree (unsigned — evidence, not a trust boundary)",
+            resolved.display()
+        );
+    } else {
+        println!("FAILED:   {}", resolved.display());
+        for reason in &outcome.reasons {
+            println!("  - {reason}");
+        }
+    }
+    Ok(if outcome.ok { 0 } else { 1 })
+}
+
+fn latest_report_dir(ci_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(ci_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    // Run ids sort lexicographically in time order (CI-YYYYMMDD-...).
+    dirs.sort();
+    dirs.into_iter()
+        .find(|dir| dir.join("report.json").exists())
+}
+
+fn latest_report(ci_dir: &std::path::Path) -> Option<serde_json::Value> {
+    let dir = latest_report_dir(ci_dir)?;
+    let text = std::fs::read_to_string(dir.join("report.json")).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 #[cfg(test)]

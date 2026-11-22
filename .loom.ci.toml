@@ -1,0 +1,47 @@
+# Loom dogfood CI policy (`doc/15` §4.5, schema locked by `doc/16` §7.3).
+# Tracked project policy: review changes to this file like code.
+version = 1
+
+# Target projects may leave this empty; Loom dogfood uses the container
+# script so the host toolchain is never assumed.
+[runner]
+argv = ["./scripts/dev.sh"]
+
+[profiles]
+pre-commit = ["fmt-fix"]
+pre-push = ["fmt-check", "clippy", "test"]
+fast = ["fmt-check", "clippy"]
+full = ["fmt-check", "clippy", "test", "build"]
+
+[[jobs]]
+id = "fmt-check"
+argv = ["cargo", "fmt", "--all", "--", "--check"]
+timeout_s = 120
+local_sufficient = true
+
+[[jobs]]
+id = "fmt-fix"
+argv = ["cargo", "fmt", "--all", "--", "--check"]
+fix_argv = ["cargo", "fmt", "--all"]
+fix_safe = true
+timeout_s = 120
+
+[[jobs]]
+id = "clippy"
+argv = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+timeout_s = 600
+local_sufficient = true
+
+[[jobs]]
+id = "test"
+argv = ["cargo", "test", "--workspace"]
+needs = ["clippy"]
+timeout_s = 900
+local_sufficient = true
+
+[[jobs]]
+id = "build"
+argv = ["cargo", "build", "--workspace"]
+needs = ["test"]
+timeout_s = 600
+local_sufficient = true

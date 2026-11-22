@@ -18,6 +18,7 @@ pub use config::{
 pub use detect::{bootstrap, detect, BootstrapReport, Detection, Evidence};
 pub use exec::{missing_tool, which};
 pub use report::{
-    sha256_hex, tree_fingerprint, tree_id, Attestation, JobReport, RunReport, TreeFingerprint,
+    sha256_hex, tree_fingerprint, tree_id, verify_attestation, Attestation, JobReport, RunReport,
+    TreeFingerprint, VerifyOutcome,
 };
 pub use run::{run, RunOutcome, RunRequest, EXIT_FAILED, EXIT_NEEDS_HUMAN, EXIT_OK, EXIT_TIMEOUT};

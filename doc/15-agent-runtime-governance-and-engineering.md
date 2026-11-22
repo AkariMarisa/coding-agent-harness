@@ -765,6 +765,8 @@ Conclusion: **do "scan + local catalog + on-demand loading + static checks + loc
 
 ## 4. Problem four: initialization and agent/harness-driven local CI
 
+> Status: **partially implemented (2026-11-22)** — `.loom.ci.toml` schema (locked by [16](16-runtime-governance-adoption-assessment.md) §7.3), stack detection and generation (`loom ci plan`, `loom init` with `--dry-run` / keep / `--force` backup), sequential `loom ci run` (argv-only execution, env allowlist, process-group timeouts, ANSI-stripped logs, `--fix`, `report.json` + `attestation.json`), `loom ci doctor`, `loom ci report`, `loom ci verify-attest`, the `[ci]` config section, the §7.9 attention linkage, and this repository's dogfood `.loom.ci.toml`. Deviation: `loom ci report` takes the run id **positionally** because the global `--run` flag is already taken (16 §7.5 spells it `--run <id>`). Not yet: git hooks (`install-hooks`/`remove-hooks`, `hooks_fix_safe`, fail-open), baseline preflight, review/skill jobs, `loom ci stats`, attestation signing, and any server skipping (never in v1).
+
 ### 4.1 Reframing
 
 Local CI **is not merely acceptance of the agent's work**. It is first the project's own repo-level check surface: move formatting, lint, type checking, unit tests, code review, commit-message checks and other locally completable actions forward, so that both agents and humans can resolve them before `git commit` / `git push`, reducing duplicated work on server CI.
@@ -1089,16 +1091,16 @@ Conclusion: **do detection + `.loom.ci.toml` + sequential `loom ci run` + doctor
 
 ### 4.14 Acceptance (when implemented in the future)
 
-- [ ] `loom init` detects the stack in the target project (e.g. a temporary Rust/Node/Python repo; Loom's own dogfood is verified separately) and generates `.loom.ci.toml` without overwriting existing files.
-- [ ] `loom ci run --profile pre-commit` fails on a format error, and `--fix` only fixes `safe_fix` jobs while showing the diff.
+- [x] `loom init` detects the stack in the target project (e.g. a temporary Rust/Node/Python repo; Loom's own dogfood is verified separately) and generates `.loom.ci.toml` without overwriting existing files (2026-11-22; `loom_ci::detect` + `bootstrap`, `--dry-run`/keep/`--force` backup, unit tests; this repo's dogfood `.loom.ci.toml` is committed).
+- [x] `loom ci run --profile pre-commit` fails on a format error, and `--fix` only fixes `safe_fix` jobs while showing the diff (2026-11-22; verified with fixture jobs in the smoke — a failing job stops the run, `--fix` touches only `fix_safe` jobs, shows `git diff --stat`, and stages nothing; the dogfood `fmt-fix` job has the same shape).
 - [ ] With `hooks_fix_safe = true`, pre-commit auto-fixes safe items and re-runs; if the tree changed it asks for a fresh `git add`, never staging/committing automatically.
 - [ ] `loom ci install-hooks` is idempotent; it refuses when a non-Loom hook exists, and `--force` backs up first; no promise of recording `--no-verify`.
-- [ ] The report/attestation contains tree, argv, tool versions, exit codes; verification passes for the same tree and fails for a different tree.
-- [ ] v1 does not skip server jobs using local attestations; only after signed/trusted runners exist may deterministic jobs with `local_sufficient = true` be skipped, and security/release/matrix jobs never.
+- [x] The report/attestation contains tree, argv, tool versions, exit codes; verification passes for the same tree and fails for a different tree (2026-11-22; per the locked field list in 16 §7.8 — `tool_versions` is not in it and is deliberately absent; `loom ci verify-attest` passes on the same tree and fails on a changed or newly untracked file).
+- [x] v1 does not skip server jobs using local attestations; only after signed/trusted runners exist may deterministic jobs with `local_sufficient = true` be skipped, and security/release/matrix jobs never (2026-11-22; by construction — v1 has no skip mechanism, and `verify-attest` prints `unsigned — evidence, not a trust boundary`).
 - [ ] The review job has token/time limits, is advisory by default, produces structured findings, and has no network.
 - [ ] `kind = "skill"` can only load skills that are in the lock and passed static checks, and cannot turn off a gate.
-- [ ] CI failures open attention `review`/`operation` items; they auto-resolve after a success on the same tree.
-- [ ] `loom verify` behavior is unchanged and still treats only TaskSpec acceptance as the task authority.
+- [x] CI failures open attention `review`/`operation` items; they auto-resolve after a success on the same tree (2026-11-22; `ci:<job>:<tree>` review items with green-resolve, `env:missing-tool:` operation from run/doctor, smoke-verified).
+- [x] `loom verify` behavior is unchanged and still treats only TaskSpec acceptance as the task authority (2026-11-22; the CI work never touches verify — its smoke rings stay green).
 
 ---
 
@@ -1203,17 +1205,17 @@ Notes:
 
 ## 9. Minimal acceptance checklist (when implemented in the future)
 
-- [ ] `loom ci plan` detects the stack in the target project (a Rust workspace when Loom dogfoods itself) and outputs jobs with evidence.
-- [ ] `loom init` does not overwrite an existing `.loom.ci.toml` / workflow / hook; `--dry-run` writes nothing.
-- [ ] With `cargo`/`pnpm` missing, `loom ci doctor` gives an actionable error instead of silently skipping.
-- [ ] `loom ci run --profile pre-commit` fails on a format error; `--fix` only fixes `safe_fix` jobs and shows the diff, with no automatic commit.
+- [x] `loom ci plan` detects the stack in the target project (a Rust workspace when Loom dogfoods itself) and outputs jobs with evidence (2026-11-22; smoke asserts evidence, jobs and the runner).
+- [x] `loom init` does not overwrite an existing `.loom.ci.toml` / workflow / hook; `--dry-run` writes nothing (2026-11-22; bootstrap keeps byte-for-byte, `--force` backs up first, dry-run writes nothing — unit tests + smoke).
+- [x] With `cargo`/`pnpm` missing, `loom ci doctor` gives an actionable error instead of silently skipping (2026-11-22; doctor probes every job's tools plus the runner, prints `tools: missing: …`, exits 2, and run/doctor open a blocking `env:missing-tool:` operation item).
+- [x] `loom ci run --profile pre-commit` fails on a format error; `--fix` only fixes `safe_fix` jobs and shows the diff, with no automatic commit (2026-11-22; fixture jobs in the smoke; staging stays empty).
 - [ ] When `hooks_fix_safe` is in effect, pre-commit auto-fixes safe items and re-runs; if the tree changed it asks for a fresh `git add`, never staging/committing.
 - [ ] `loom ci install-hooks` is idempotent; it refuses when a non-Loom hook exists, and `--force` backs up first; no promise of recording `--no-verify`.
-- [ ] The report/attestation contains tree, argv, tool versions, exit codes; verification passes for the same tree and fails for a different tree; v1 does not skip server jobs on that basis.
+- [x] The report/attestation contains tree, argv, tool versions, exit codes; verification passes for the same tree and fails for a different tree; v1 does not skip server jobs on that basis (2026-11-22; `tool_versions` is absent by design — it is not in 16 §7.8's locked field list; no skip mechanism exists).
 - [ ] The review job has token/time limits, is advisory by default, produces structured findings, and has no network; `kind=skill` can only load skills in the lock that passed static checks.
 - [ ] A `needs_input` receipt after `loom verify` has status `needs_input`, **produces no `task.failed`**, and does not raise the escalation count.
 - [x] `task.needs_input` automatically opens a `question` attention item; `loom answer` resolves it automatically (2026-11-20; events + `.loom/inbox.json` view — the `loom inbox` display lands with §2.2's command).
-- [ ] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears (doctor linkage done 2026-11-21 for all failing checks — FAIL opens `doctor:<check>`, PASS resolves it; the `loom ci` half waits for the CI core).
+- [x] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears (doctor linkage 2026-11-21 — FAIL opens `doctor:<check>`, PASS resolves it; CI linkage 2026-11-22 — `ci:<job>:<tree>` review items resolve when the job is green on that tree, `env:missing-tool:` operation on a missing tool).
 - [x] On a TTY, human commands print one footer line on stderr; `--json` stdout contains no footer; nothing is printed for non-TTY/CI; `LOOM_NO_INBOX=1` turns it off (2026-11-21; `emit_footer`, gated by `[attention] footer = tty|always|off`).
 - [x] `loom inbox` shows both question and operation items; `loom inbox --check` exits `2` when any `blocking` exists; `ack` does not close an item, `defer` applies only to `soon/info` (2026-11-21; all kinds render — `operation` items appear once the doctor/CI sources below open them).
 - [x] A scripted provider calls the `ask` tool → `questions.json` → exit 2 → `loom answer` → the task returns to `ready` and the next packet carries the answer (2026-11-18; the `loom inbox` hop in the middle is the deferred §2.2 inbox).

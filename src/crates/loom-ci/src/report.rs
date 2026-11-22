@@ -9,6 +9,8 @@ use std::path::Path;
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
+
+use crate::config::ci_path;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,9 +137,60 @@ pub fn tree_id(fingerprint: &TreeFingerprint) -> String {
     digest[..12].to_string()
 }
 
+/// Result of `loom ci verify-attest`: what the file can and cannot prove.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VerifyOutcome {
+    pub ok: bool,
+    /// Everything that failed to line up; empty when the file matches.
+    pub reasons: Vec<String>,
+    /// Always true in v1: unsigned is expected, never trustworthy-by-default.
+    pub unsigned: bool,
+}
+
+/// Verify an attestation against the report it pins and the tree on disk
+/// (`doc/16` §7.8). Proves "this file matches this tree" — nothing more:
+/// v1 has no signature, and no server job may skip because of this.
+pub fn verify_attestation(root: &Path, path: &Path) -> Result<VerifyOutcome, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let attestation: Attestation =
+        serde_json::from_str(&text).map_err(|error| format!("parse attestation: {error}"))?;
+
+    let mut reasons = Vec::new();
+
+    let report_path = path.parent().unwrap_or(root).join("report.json");
+    match std::fs::read(&report_path) {
+        Ok(bytes) => {
+            if sha256_hex(&bytes) != attestation.report_sha256 {
+                reasons.push("report.json does not match the pinned digest".to_string());
+            }
+        }
+        Err(error) => reasons.push(format!("cannot read {}: {error}", report_path.display())),
+    }
+
+    let current = tree_fingerprint(root);
+    if tree_id(&current) != tree_id(&attestation.tree) {
+        reasons.push("working tree differs from the attested tree".to_string());
+    }
+
+    let ci_hash = std::fs::read(ci_path(root))
+        .ok()
+        .map(|bytes| sha256_hex(&bytes));
+    if ci_hash != attestation.ci_toml_sha256 {
+        reasons.push(".loom.ci.toml changed since the run".to_string());
+    }
+
+    Ok(VerifyOutcome {
+        ok: reasons.is_empty(),
+        reasons,
+        unsigned: attestation.signature == "none",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn fingerprint_degrades_outside_a_repo() {
@@ -245,5 +298,106 @@ mod tests {
         };
         assert_eq!(attestation.signature, "none");
         assert_eq!(attestation.report_sha256.len(), 64);
+    }
+
+    fn git_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .expect("git");
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "ci@example.com"]);
+        git(&["config", "user.name", "ci"]);
+        // Mirror a real project: the state layer is ignored, so CI artifacts
+        // never move the tree the attestation pins.
+        std::fs::write(dir.path().join(".gitignore"), "/.loom/*\n").expect("write");
+        std::fs::write(dir.path().join("a.txt"), "one").expect("write");
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init"]);
+        dir
+    }
+
+    fn attest(dir: &Path) -> PathBuf {
+        let tree = tree_fingerprint(dir);
+        let run_dir = dir.join(".loom").join("ci").join("CI-TEST");
+        std::fs::create_dir_all(&run_dir).expect("mkdir");
+        let report = RunReport {
+            v: 1,
+            run_id: "CI-TEST".into(),
+            profile: "fast".into(),
+            ci_toml_sha256: None,
+            tree: tree.clone(),
+            started_at_ms: 1,
+            duration_ms: 2,
+            jobs: Vec::new(),
+            ok: true,
+            local_sufficient: true,
+            advisory: false,
+            missing_tool: None,
+        };
+        let report_path = run_dir.join("report.json");
+        let text = serde_json::to_string_pretty(&report).expect("serialize");
+        let bytes = format!("{text}\n");
+        std::fs::write(&report_path, &bytes).expect("write");
+        let attestation = Attestation {
+            v: 1,
+            run_id: "CI-TEST".into(),
+            // Pin the bytes on disk, newline included — same as `run` does.
+            report_sha256: sha256_hex(bytes.as_bytes()),
+            tree,
+            ci_toml_sha256: None,
+            signature: "none".into(),
+            created_at_ms: 3,
+        };
+        let attestation_path = run_dir.join("attestation.json");
+        let text = serde_json::to_string_pretty(&attestation).expect("serialize");
+        std::fs::write(&attestation_path, format!("{text}\n")).expect("write");
+        attestation_path
+    }
+
+    #[test]
+    fn attestation_verifies_on_the_same_tree_and_fails_on_another() {
+        let dir = git_repo();
+        let path = attest(dir.path());
+
+        let outcome = verify_attestation(dir.path(), &path).expect("verify");
+        assert!(outcome.ok, "same tree must verify: {:?}", outcome.reasons);
+        assert!(outcome.unsigned, "v1 is unsigned by design");
+
+        // A tracked edit moves the tree.
+        std::fs::write(dir.path().join("a.txt"), "changed").expect("write");
+        let outcome = verify_attestation(dir.path(), &path).expect("verify");
+        assert!(!outcome.ok);
+        assert!(outcome
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("tree differs")));
+
+        // An untracked file moves it too (verification must see new files).
+        std::fs::write(dir.path().join("a.txt"), "one").expect("restore");
+        std::fs::write(dir.path().join("brand-new.txt"), "x").expect("write");
+        let outcome = verify_attestation(dir.path(), &path).expect("verify");
+        assert!(!outcome.ok, "untracked files are part of the tree");
+    }
+
+    #[test]
+    fn tampered_report_fails_the_digest_check() {
+        let dir = git_repo();
+        let path = attest(dir.path());
+        let report_path = path.parent().expect("dir").join("report.json");
+        std::fs::write(&report_path, "{\"v\":1}").expect("tamper");
+
+        let outcome = verify_attestation(dir.path(), &path).expect("verify");
+        assert!(!outcome.ok);
+        assert!(outcome
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("digest")));
     }
 }

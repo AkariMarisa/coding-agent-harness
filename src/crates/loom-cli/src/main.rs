@@ -77,6 +77,10 @@ enum Command {
         /// Overwrite config.toml (existing README.md / goal.md / constraints.md are kept).
         #[arg(long)]
         force: bool,
+        /// Print the detection plan and write nothing, not even the skeleton
+        /// (`doc/16` §7.6).
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Check the local workspace and runtime layout.
     Doctor,
@@ -438,6 +442,28 @@ enum CiCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Diagnose config, toolchain, stack and the last run.
+    Doctor {
+        /// Alias for --format json.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a run report (latest by default).
+    Report {
+        /// Run id (CI-...); positional because the global --run is taken.
+        run_id: Option<String>,
+        /// Alias for --format json.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify an attestation file against its report and this tree.
+    VerifyAttest {
+        /// Path to attestation.json (relative to the project root or absolute).
+        path: String,
+        /// Alias for --format json.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -627,7 +653,18 @@ fn run(cli: Cli) -> Result<i32> {
     let is_inbox = matches!(&cli.command, Command::Inbox { .. });
 
     let code = match cli.command {
-        Command::Init { force } => {
+        Command::Init { force, dry_run } => {
+            if dry_run {
+                // `doc/16` §7.6: --dry-run prints the plan and writes
+                // nothing — not even the skeleton.
+                let detection = loom_ci::detect(&project.root);
+                print!("{}", ci_cmd::render_pretty(&detection));
+                let bootstrap = loom_ci::bootstrap(&project.root, true, force)?;
+                for message in &bootstrap.messages {
+                    println!("{message}");
+                }
+                return Ok(if detection.sufficient { 0 } else { 2 });
+            }
             let report = project.init(force)?;
             println!("initialized {}", project.loom_dir().display());
             for path in &report.created_files {
@@ -638,6 +675,12 @@ fn run(cli: Cli) -> Result<i32> {
             }
             if report.gitignore_updated {
                 println!("  updated .gitignore (.loom whitelist)");
+            }
+            // `doc/16` §7.6: generate `.loom.ci.toml` after the skeleton —
+            // an existing one is kept, `--force` backs it up first.
+            let bootstrap = loom_ci::bootstrap(&project.root, false, force)?;
+            for message in &bootstrap.messages {
+                println!("  ci: {message}");
             }
             if project
                 .load_config()

@@ -764,6 +764,8 @@ score = tag_match * 3
 
 ## 4. 问题四：初始化与 agent/harness 驱动的本地 CI
 
+> 状态：**部分实现（2026-11-22）** —— `.loom.ci.toml` schema（由 [16](16-runtime-governance-adoption-assessment.zh-CN.md) §7.3 锁定）、栈检测与生成（`loom ci plan`、带 `--dry-run`/保留/`--force` 备份的 `loom init`）、顺序执行的 `loom ci run`（仅 argv、环境白名单、进程组超时、ANSI 剥离日志、`--fix`、`report.json` + `attestation.json`）、`loom ci doctor`、`loom ci report`、`loom ci verify-attest`、`[ci]` 配置节、§7.9 注意力联动，以及本仓库的 dogfood `.loom.ci.toml`。偏差：`loom ci report` 的 run id 用**位置参数**，因为全局 `--run` 标志已被占用（16 §7.5 写作 `--run <id>`）。尚未做：git hooks（`install-hooks`/`remove-hooks`、`hooks_fix_safe`、fail-open）、基线 preflight、review/skill 作业、`loom ci stats`、attestation 签名，以及任何 server 跳过（v1 永不）。
+
 ### 4.1 重新定位
 
 本地 CI **不只是验收 agent 的工作**。它首先是项目自己的仓库级检查面：把格式化、lint、类型检查、单元测试、代码审查、提交信息检查等能在本地完成的动作前移，让 agent 和人都能在 `git commit` / `git push` 之前解决，减少服务器 CI 的重复劳动。
@@ -1088,16 +1090,16 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 ### 4.14 验收（未来实现时）
 
-- [ ] `loom init` 在目标项目（例如临时 Rust/Node/Python 仓库；Loom 自身 dogfood 单独验证）识别技术栈，生成 `.loom.ci.toml`，且不覆盖已有文件。
-- [ ] `loom ci run --profile pre-commit` 在格式错误时失败，`--fix` 只修 `safe_fix` job 并展示 diff。
+- [x] `loom init` 在目标项目（例如临时 Rust/Node/Python 仓库；Loom 自身 dogfood 单独验证）识别技术栈，生成 `.loom.ci.toml`，且不覆盖已有文件。（2026-11-22；`loom_ci::detect` + `bootstrap`，`--dry-run`/保留/`--force` 备份，单测覆盖；本仓库 dogfood `.loom.ci.toml` 已提交。）
+- [x] `loom ci run --profile pre-commit` 在格式错误时失败，`--fix` 只修 `safe_fix` job 并展示 diff。（2026-11-22；smoke 用 fixture job 验证——失败即停、`--fix` 只碰 `fix_safe`、展示 `git diff --stat`、绝不 stage；dogfood 的 `fmt-fix` 同形。）
 - [ ] `hooks_fix_safe = true` 时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
 - [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。
-- [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败。
-- [ ] v1 不使用本地 attestation 跳过服务器 job；后续有签名/受信 runner 后，才只跳过 `local_sufficient = true` 的确定性 job，安全/发布/矩阵永远不跳过。
+- [x] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败。（2026-11-22；字段按 16 §7.8 锁定清单——`tool_versions` 不在其中、有意缺席；`loom ci verify-attest` 同树通过、改动或新增未跟踪文件即失败。）
+- [x] v1 不使用本地 attestation 跳过服务器 job；后续有签名/受信 runner 后，才只跳过 `local_sufficient = true` 的确定性 job，安全/发布/矩阵永远不跳过。（2026-11-22；构造上成立——v1 无任何跳过机制，`verify-attest` 明示 `unsigned — evidence, not a trust boundary`。）
 - [ ] review job 有 token/时间上限，默认 advisory，findings 结构化；无网络。
 - [ ] `kind = "skill"` 只能加载 lock 内、通过静态检查的 skill，不能关闭 gate。
-- [ ] CI 失败开 attention `review`/`operation` 事项；同 tree 成功后自动 resolve。
-- [ ] `loom verify` 行为不变，仍只以 TaskSpec acceptance 为任务权威。
+- [x] CI 失败开 attention `review`/`operation` 事项；同 tree 成功后自动 resolve。（2026-11-22；`ci:<job>:<tree>` review 事项绿跑即 resolve，缺工具开 `env:missing-tool:` operation，smoke 验证。）
+- [x] `loom verify` 行为不变，仍只以 TaskSpec acceptance 为任务权威。（2026-11-22；CI 工作不触碰 verify，其 smoke 环保持绿。）
 
 ---
 
@@ -1202,17 +1204,17 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 ## 9. 最小验收清单（未来实现时）
 
-- [ ] `loom ci plan` 能在目标项目识别技术栈（Loom 自身 dogfood 时是 Rust workspace），并给出 jobs 与证据。
-- [ ] `loom init` 不覆盖已有 `.loom.ci.toml` / workflow / hook；`--dry-run` 无写操作。
-- [ ] 缺 `cargo`/`pnpm` 时 `loom ci doctor` 给出可行动报错，而不是静默跳过。
-- [ ] `loom ci run --profile pre-commit` 在格式错误时失败；`--fix` 只修 `safe_fix` job 并展示 diff，不自动提交。
+- [x] `loom ci plan` 能在目标项目识别技术栈（Loom 自身 dogfood 时是 Rust workspace），并给出 jobs 与证据。（2026-11-22；smoke 断言证据、jobs 与 runner。）
+- [x] `loom init` 不覆盖已有 `.loom.ci.toml` / workflow / hook；`--dry-run` 无写操作。（2026-11-22；bootstrap 字节级保留、`--force` 先备份、dry-run 零写入——单测 + smoke。）
+- [x] 缺 `cargo`/`pnpm` 时 `loom ci doctor` 给出可行动报错，而不是静默跳过。（2026-11-22；doctor 逐 job 探测工具与 runner，打印 `tools: missing: …`、退出 2，并开 `env:missing-tool:` 阻塞事项。）
+- [x] `loom ci run --profile pre-commit` 在格式错误时失败；`--fix` 只修 `safe_fix` job 并展示 diff，不自动提交。（2026-11-22；smoke fixture job 验证，staging 保持为空。）
 - [ ] `hooks_fix_safe` 生效时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
 - [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。
-- [ ] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；v1 不据此跳过服务器 job。
+- [x] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；v1 不据此跳过服务器 job。（2026-11-22；`tool_versions` 按 16 §7.8 锁定清单有意缺席；不存在任何跳过机制。）
 - [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。
 - [x] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。（2026-11-20；事件 + `.loom/inbox.json` 视图——`loom inbox` 展示随 §2.2 命令落地。）
-- [ ] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。（doctor 联动已做 2026-11-21，覆盖全部失败检查——FAIL 开 `doctor:<check>`、PASS 自动 resolve；`loom ci` 一半等 CI 核心。）
+- [x] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。（doctor 联动 2026-11-21——FAIL 开 `doctor:<check>`、PASS 自动 resolve；CI 联动 2026-11-22——`ci:<job>:<tree>` review 事项同树绿跑即 resolve，缺工具开 `env:missing-tool:` operation。）
 - [x] 人类命令在 TTY 下 stderr 出现一行 footer；`--json` stdout 不含 footer；非 TTY/CI 不打印；`LOOM_NO_INBOX=1` 可关闭。（2026-11-21；`emit_footer`，由 `[attention] footer = tty|always|off` 控制。）
 - [x] `loom inbox` 同时显示问题与操作类事项；`loom inbox --check` 在存在 `blocking` 时退出 `2`；`ack` 不关闭事项，`defer` 只作用于 `soon/info`。（2026-11-21；所有 kind 均可渲染——`operation` 事项待下方 doctor/CI 来源接入后出现。）
 - [x] 脚本化 provider 调用 `ask` 工具 → `questions.json` → exit 2 → `loom answer` → 任务回到 `ready` 且下一个 packet 带上答案（2026-11-18；中间的 `loom inbox` 一环属已推迟的 §2.2 inbox）。

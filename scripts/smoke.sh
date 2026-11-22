@@ -671,5 +671,45 @@ test "$code" = "1" || {
     echo "expected default_profile fallback to fail like fast, got $code" >&2
     exit 1
 }
+# init --dry-run writes nothing and keeps an existing configuration
+# (doc/16 §7.6).
+loom init --dry-run > /dev/null
+grep -q 'always-fail' /work/.smoke/.loom.ci.toml || {
+    echo "init --dry-run must not touch .loom.ci.toml" >&2
+    exit 1
+}
+# doctor diagnoses the missing tool as "needs human" (exit 2), not a crash.
+code=0
+loom ci doctor --json > /work/.smoke/.loom/ci-doctor.json || code=$?
+test "$code" = "2" || {
+    echo "expected doctor exit 2 for the broken job's tool, got $code" >&2
+    exit 1
+}
+grep -q '"ok": false' /work/.smoke/.loom/ci-doctor.json
+grep -q 'definitely-not-a-real-tool-xyz' /work/.smoke/.loom/ci-doctor.json
+# report: latest by default, positional run id selects one explicitly.
+loom ci report --json > /work/.smoke/.loom/ci-latest.json
+grep -q '"run_id": "CI-' /work/.smoke/.loom/ci-latest.json
+run_id=$(grep -o '"run_id": "CI-[^"]*"' /work/.smoke/.loom/ci-latest.json | head -1 | cut -d'"' -f4)
+test -n "$run_id"
+loom ci report "$run_id" --json | grep -q "$run_id" || {
+    echo "expected positional run id to select that report" >&2
+    exit 1
+}
+# verify-attest: same tree passes, a new untracked file fails it (doc/16 §7.8).
+att=$(ls -t /work/.smoke/.loom/ci/CI-*/attestation.json | head -1)
+test -n "$att"
+loom ci verify-attest "$att" --format pretty | grep -q 'verified:' || {
+    echo "expected the latest attestation to verify on the same tree" >&2
+    exit 1
+}
+touch /work/.smoke/tree-changer.txt
+code=0
+loom ci verify-attest "$att" > /dev/null || code=$?
+test "$code" = "1" || {
+    echo "expected verify-attest exit 1 after the tree changed, got $code" >&2
+    exit 1
+}
+rm /work/.smoke/tree-changer.txt
 
 echo "SMOKE_OK"

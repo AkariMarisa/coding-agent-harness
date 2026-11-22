@@ -476,6 +476,8 @@ v1 明确不调用 LLM 自动回答问题。确定性策略只能处理“缺工
 
 ## 7. D. 本地 CI
 
+> 状态：**已实现（2026-11-22）** §7.2–§7.6 与 §7.8–§7.10 —— schema、检测/生成、顺序 `loom ci run`、`doctor`/`report`/`verify-attest`、report + 注意力联动、离线测试。§7.7（hooks）尚未做。偏差：`loom ci report` 的 run id 用**位置参数**——全局 `--run` 已占用该名（§7.5 写作 `--run <id>`）。
+
 ### 7.1 作用对象与权威
 
 本地 CI 的对象是 **Loom 管理的目标项目**，不是 Loom 自身。Loom 仓库用同一套机制属于 dogfood，`./scripts/dev.sh` 只是 Loom 的 runner 示例，不能写死成产品默认。
