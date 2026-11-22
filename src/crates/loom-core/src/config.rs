@@ -23,6 +23,8 @@ pub struct Config {
     pub parallel: ParallelConfig,
     /// Resident attention inbox (`doc/15` §2.2).
     pub attention: AttentionConfig,
+    /// Local CI preferences (`doc/15` §4.5).
+    pub ci: CiConfig,
 }
 
 /// M4 starts at 2 parallel workers; 3+ needs an A/B showing WPT/CPVT do not
@@ -54,6 +56,7 @@ impl Default for Config {
             routing: RoutingConfig::default(),
             parallel: ParallelConfig::default(),
             attention: AttentionConfig::default(),
+            ci: CiConfig::default(),
         }
     }
 }
@@ -82,6 +85,22 @@ impl Default for AttentionConfig {
             include_in_packet: "off".to_string(),
             dedupe_cooldown_s: 600,
             retain_days: 7,
+        }
+    }
+}
+
+/// `[ci]` local-CI preferences (`doc/15` §4.5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CiConfig {
+    /// Profile used by `loom ci run` when `--profile` is omitted.
+    pub default_profile: String,
+}
+
+impl Default for CiConfig {
+    fn default() -> Self {
+        Self {
+            default_profile: "fast".to_string(),
         }
     }
 }
@@ -166,6 +185,11 @@ impl Config {
         if !(0..=90).contains(&self.attention.retain_days) {
             return Err(ConfigError::Validation(
                 "attention.retain_days must be 0..=90".to_string(),
+            ));
+        }
+        if self.ci.default_profile.trim().is_empty() {
+            return Err(ConfigError::Validation(
+                "ci.default_profile must not be empty".to_string(),
             ));
         }
         Ok(())

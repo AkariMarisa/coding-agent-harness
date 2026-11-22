@@ -423,6 +423,21 @@ enum CiCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Execute a profile's jobs sequentially and write a report.
+    Run {
+        /// Profile to run; defaults to [ci] default_profile.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Run every job even after a failure.
+        #[arg(long)]
+        keep_going: bool,
+        /// Only fix_safe jobs: run fix_argv, verify with argv, show the diff.
+        #[arg(long)]
+        fix: bool,
+        /// Alias for --format json.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

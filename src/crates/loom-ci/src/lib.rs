@@ -8,8 +8,16 @@
 
 mod config;
 mod detect;
+mod exec;
+mod report;
+mod run;
 
 pub use config::{
     ci_path, load_ci_file, CiFile, Job, Runner, CI_CONFIG_MAX_BYTES, CI_CONFIG_NAME, CI_VERSION,
 };
 pub use detect::{bootstrap, detect, BootstrapReport, Detection, Evidence};
+pub use exec::{missing_tool, which};
+pub use report::{
+    sha256_hex, tree_fingerprint, tree_id, Attestation, JobReport, RunReport, TreeFingerprint,
+};
+pub use run::{run, RunOutcome, RunRequest, EXIT_FAILED, EXIT_NEEDS_HUMAN, EXIT_OK, EXIT_TIMEOUT};

@@ -567,4 +567,109 @@ test ! -f /work/.smoke/.loom.ci.toml || {
     exit 1
 }
 
+# --- local CI: sequential run, exit codes, report, attention (doc/16 §7) ---
+# Mirror a real project's state after `loom init`: the whitelist keeps run
+# logs out of the tree fingerprint, so "same tree" is stable across runs
+# (doc/16 §7.8 — untracked files ARE part of the tree).
+cat > /work/.smoke/.gitignore <<'EOF'
+# loom: contract layer tracked, state layer ignored (whitelist)
+/.loom/*
+!/.loom/README.md
+!/.loom/goal.md
+!/.loom/constraints.md
+!/.loom/specs/
+.worktrees/
+EOF
+cat > /work/.smoke/.loom.ci.toml <<'EOF'
+version = 1
+
+[profiles]
+fast = ["probe", "always-fail"]
+green = ["probe"]
+missing = ["broken"]
+
+[[jobs]]
+id = "probe"
+argv = ["sh", "-c", "test -f .loom/ci/green-flag"]
+fix_argv = ["sh", "-c", "touch .loom/ci/green-flag"]
+fix_safe = true
+timeout_s = 10
+
+[[jobs]]
+id = "always-fail"
+argv = ["sh", "-c", "exit 7"]
+timeout_s = 10
+
+[[jobs]]
+id = "broken"
+argv = ["definitely-not-a-real-tool-xyz"]
+timeout_s = 10
+EOF
+# First failure stops the run (exit 1) and opens a ci review item.
+code=0
+loom ci run --profile fast > /dev/null 2>&1 || code=$?
+test "$code" = "1" || {
+    echo "expected exit 1 from a failing profile, got $code" >&2
+    exit 1
+}
+loom inbox --kind review --format json | grep -q '"dedupe_key": "ci:probe:' || {
+    echo "expected a ci:probe review item after a failed job" >&2
+    exit 1
+}
+# --json stdout is a pure report; the failure is recorded with its exit code.
+loom ci run --profile fast --json > /work/.smoke/.loom/ci-report.json || true
+grep -q '"run_id": "CI-' /work/.smoke/.loom/ci-report.json || {
+    echo "expected a CI- run id in the report" >&2
+    exit 1
+}
+grep -q '"ok": false' /work/.smoke/.loom/ci-report.json
+grep -q '"exit": 1' /work/.smoke/.loom/ci-report.json
+test -n "$(ls /work/.smoke/.loom/ci/CI-*/report.json 2>/dev/null)" || {
+    echo "expected report.json under .loom/ci/<run>/" >&2
+    exit 1
+}
+# --fix runs fix_argv, verifies with argv, resolves the item on the same
+# tree, and never stages anything.
+loom ci run --profile green --fix > /dev/null || {
+    echo "expected --fix to pass after applying the safe fix" >&2
+    exit 1
+}
+test -f /work/.smoke/.loom/ci/green-flag || {
+    echo "expected --fix to run fix_argv" >&2
+    exit 1
+}
+test -z "$(git -C /work/.smoke status --porcelain | grep '^[MAD]')" || {
+    echo "--fix must never stage changes" >&2
+    exit 1
+}
+if loom inbox --kind review --format json | grep -q 'ci:probe:'; then
+    echo "expected ci:probe to auto-resolve once the job is green" >&2
+    exit 1
+fi
+# --keep-going runs past the first failure and records every exit code.
+loom ci run --profile fast --keep-going --json > /work/.smoke/.loom/ci-kg.json || true
+grep -q '"id": "always-fail"' /work/.smoke/.loom/ci-kg.json || {
+    echo "expected --keep-going to reach always-fail" >&2
+    exit 1
+}
+grep -q '"exit": 7' /work/.smoke/.loom/ci-kg.json
+# A missing tool is "needs human handling" (exit 2), not a code failure.
+code=0
+loom ci run --profile missing > /dev/null 2>&1 || code=$?
+test "$code" = "2" || {
+    echo "expected exit 2 for a missing tool, got $code" >&2
+    exit 1
+}
+loom inbox --kind operation --format json | grep -q 'definitely-not-a-real-tool-xyz' || {
+    echo "expected a blocking operation item for the missing tool" >&2
+    exit 1
+}
+# No --profile falls back to [ci] default_profile ("fast" → exit 1 here).
+code=0
+loom ci run > /dev/null 2>&1 || code=$?
+test "$code" = "1" || {
+    echo "expected default_profile fallback to fail like fast, got $code" >&2
+    exit 1
+}
+
 echo "SMOKE_OK"

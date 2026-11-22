@@ -524,12 +524,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-ci"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "loom-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "loom-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "loom-adapter",
+ "loom-ci",
  "loom-context",
  "loom-core",
  "loom-native",
