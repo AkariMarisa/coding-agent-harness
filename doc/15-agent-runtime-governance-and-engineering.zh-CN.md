@@ -764,7 +764,7 @@ score = tag_match * 3
 
 ## 4. 问题四：初始化与 agent/harness 驱动的本地 CI
 
-> 状态：**部分实现（2026-11-22）** —— `.loom.ci.toml` schema（由 [16](16-runtime-governance-adoption-assessment.zh-CN.md) §7.3 锁定）、栈检测与生成（`loom ci plan`、带 `--dry-run`/保留/`--force` 备份的 `loom init`）、顺序执行的 `loom ci run`（仅 argv、环境白名单、进程组超时、ANSI 剥离日志、`--fix`、`report.json` + `attestation.json`）、`loom ci doctor`、`loom ci report`、`loom ci verify-attest`、`[ci]` 配置节、§7.9 注意力联动，以及本仓库的 dogfood `.loom.ci.toml`。偏差：`loom ci report` 的 run id 用**位置参数**，因为全局 `--run` 标志已被占用（16 §7.5 写作 `--run <id>`）。尚未做：git hooks（`install-hooks`/`remove-hooks`、`hooks_fix_safe`、fail-open）、基线 preflight、review/skill 作业、`loom ci stats`、attestation 签名，以及任何 server 跳过（v1 永不）。
+> 状态：**部分实现（2026-11-22）** —— `.loom.ci.toml` schema（由 [16](16-runtime-governance-adoption-assessment.zh-CN.md) §7.3 锁定）、栈检测与生成（`loom ci plan`、带 `--dry-run`/保留/`--force` 备份的 `loom init`）、顺序执行的 `loom ci run`（仅 argv、环境白名单、进程组超时、ANSI 剥离日志、`--fix`、`report.json` + `attestation.json`）、`loom ci doctor`、`loom ci report`、`loom ci verify-attest`、`[ci]` 配置节、§7.9 注意力联动，以及本仓库的 dogfood `.loom.ci.toml`。偏差：`loom ci report` 的 run id 用**位置参数**，因为全局 `--run` 标志已被占用（16 §7.5 写作 `--run <id>`）。hooks（2026-11-22）：`loom ci install-hooks --profiles …` / `remove-hooks`，带 `# loom-managed` 标记——外来 hook 默认拒绝、`--force` 先备份；生成的脚本只调 `loom ci run --from-hook`；`hooks_fix_safe` 先跑安全修复、树变动即以 `git add` 提示拦截；`hooks_fail_open=false` 会把缺 `loom` 的分支翻成拦截；`LOOM_CI_SKIP=1` 跳过（不算证据）；`--no-verify` 依旧不可观测（设计如此）。尚未做：基线 preflight、review/skill 作业、`loom ci stats`、attestation 签名，以及任何 server 跳过（v1 永不）。
 
 ### 4.1 重新定位
 
@@ -1092,8 +1092,8 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 
 - [x] `loom init` 在目标项目（例如临时 Rust/Node/Python 仓库；Loom 自身 dogfood 单独验证）识别技术栈，生成 `.loom.ci.toml`，且不覆盖已有文件。（2026-11-22；`loom_ci::detect` + `bootstrap`，`--dry-run`/保留/`--force` 备份，单测覆盖；本仓库 dogfood `.loom.ci.toml` 已提交。）
 - [x] `loom ci run --profile pre-commit` 在格式错误时失败，`--fix` 只修 `safe_fix` job 并展示 diff。（2026-11-22；smoke 用 fixture job 验证——失败即停、`--fix` 只碰 `fix_safe`、展示 `git diff --stat`、绝不 stage；dogfood 的 `fmt-fix` 同形。）
-- [ ] `hooks_fix_safe = true` 时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
-- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。
+- [x] `hooks_fix_safe = true` 时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。（2026-11-22；`pre_fix` 在检查前跑该 profile 的 `fix_argv`、重测树指纹、以 exit 1 附提示——smoke 端到端验证，staging 恒为空。）
+- [x] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。（2026-11-22；托管 hook 原位刷新、外来 hook 在 `--force` 前 exit 2 并备份为 `<hook>.<ts>.bak`、`remove-hooks` 只删带标记的——smoke 验证；`--no-verify` 按设计不可观测。）
 - [x] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败。（2026-11-22；字段按 16 §7.8 锁定清单——`tool_versions` 不在其中、有意缺席；`loom ci verify-attest` 同树通过、改动或新增未跟踪文件即失败。）
 - [x] v1 不使用本地 attestation 跳过服务器 job；后续有签名/受信 runner 后，才只跳过 `local_sufficient = true` 的确定性 job，安全/发布/矩阵永远不跳过。（2026-11-22；构造上成立——v1 无任何跳过机制，`verify-attest` 明示 `unsigned — evidence, not a trust boundary`。）
 - [ ] review job 有 token/时间上限，默认 advisory，findings 结构化；无网络。
@@ -1208,8 +1208,8 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [x] `loom init` 不覆盖已有 `.loom.ci.toml` / workflow / hook；`--dry-run` 无写操作。（2026-11-22；bootstrap 字节级保留、`--force` 先备份、dry-run 零写入——单测 + smoke。）
 - [x] 缺 `cargo`/`pnpm` 时 `loom ci doctor` 给出可行动报错，而不是静默跳过。（2026-11-22；doctor 逐 job 探测工具与 runner，打印 `tools: missing: …`、退出 2，并开 `env:missing-tool:` 阻塞事项。）
 - [x] `loom ci run --profile pre-commit` 在格式错误时失败；`--fix` 只修 `safe_fix` job 并展示 diff，不自动提交。（2026-11-22；smoke fixture job 验证，staging 保持为空。）
-- [ ] `hooks_fix_safe` 生效时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。
-- [ ] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。
+- [x] `hooks_fix_safe` 生效时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。（2026-11-22；同一机制，经生成的 hook 端到端 smoke 验证。）
+- [x] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。（2026-11-22；托管 hook 原位刷新、外来 hook 在 `--force` 前 exit 2 并备份为 `<hook>.<ts>.bak`、`remove-hooks` 只删带标记的——smoke 验证；`--no-verify` 按设计不可观测。）
 - [x] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；v1 不据此跳过服务器 job。（2026-11-22；`tool_versions` 按 16 §7.8 锁定清单有意缺席；不存在任何跳过机制。）
 - [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。

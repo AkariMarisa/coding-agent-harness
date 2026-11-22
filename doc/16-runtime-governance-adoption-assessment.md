@@ -476,7 +476,7 @@ v1 explicitly does not call an LLM to answer questions. Deterministic policy can
 
 ## 7. D. Local CI
 
-> Status: **implemented (2026-11-22)** for §7.2–§7.6 and §7.8–§7.10 — schema, detection/generation, sequential `loom ci run`, `doctor`/`report`/`verify-attest`, report + attention linkage, and the offline tests. §7.7 (hooks) not yet. Deviation: `loom ci report` takes the run id **positionally** — the global `--run` flag already claims that name (§7.5 spells it `--run <id>`).
+> Status: **implemented (2026-11-22)** for §7.2–§7.10 — schema, detection/generation, sequential `loom ci run`, `doctor`/`report`/`verify-attest`, report + attention linkage, the offline tests, and §7.7 hooks (`install-hooks`/`remove-hooks`, fail-open, `hooks_fix_safe`, `LOOM_CI_SKIP`). Deviation: `loom ci report` takes the run id **positionally** — the global `--run` flag already claims that name (§7.5 spells it `--run <id>`).
 
 ### 7.1 What it applies to and authority
 

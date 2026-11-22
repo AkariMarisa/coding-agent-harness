@@ -441,6 +441,10 @@ enum CiCommand {
         /// Alias for --format json.
         #[arg(long)]
         json: bool,
+        /// Called by a generated git hook: applies the fail-open policy for
+        /// unusable configuration or an absent runner (`doc/16` §7.7).
+        #[arg(long, hide = true)]
+        from_hook: bool,
     },
     /// Diagnose config, toolchain, stack and the last run.
     Doctor {
@@ -464,6 +468,17 @@ enum CiCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Install git hooks that only call `loom ci run --from-hook`.
+    InstallHooks {
+        /// Comma-separated hook names; each runs the profile of the same name.
+        #[arg(long, default_value = "pre-commit,pre-push")]
+        profiles: String,
+        /// Replace a foreign hook after backing it up as `<hook>.<ts>.bak`.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove Loom-managed hooks (foreign hooks are never touched).
+    RemoveHooks,
 }
 
 #[derive(Debug, Subcommand)]

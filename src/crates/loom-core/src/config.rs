@@ -89,18 +89,27 @@ impl Default for AttentionConfig {
     }
 }
 
-/// `[ci]` local-CI preferences (`doc/15` §4.5).
+/// `[ci]` local-CI preferences (`doc/15` §4.5, hooks policy `doc/16` §7.7).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CiConfig {
     /// Profile used by `loom ci run` when `--profile` is omitted.
     pub default_profile: String,
+    /// Pre-commit runs the `fix_argv` of `fix_safe` jobs first, re-runs the
+    /// checks, and fails when the tree changed (asks for a fresh `git add`).
+    /// Defaults to false: fixes before a commit are opt-in.
+    pub hooks_fix_safe: bool,
+    /// When a hook cannot find `loom`, let the commit through with a warning
+    /// (a fresh clone must still work). Controls the generated script.
+    pub hooks_fail_open: bool,
 }
 
 impl Default for CiConfig {
     fn default() -> Self {
         Self {
             default_profile: "fast".to_string(),
+            hooks_fix_safe: false,
+            hooks_fail_open: true,
         }
     }
 }

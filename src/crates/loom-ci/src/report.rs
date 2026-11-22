@@ -56,6 +56,9 @@ pub struct RunReport {
     /// probes passed. Extra beyond `doc/16` §7.8's minimum field list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing_tool: Option<String>,
+    /// `hooks_fix_safe` pre-fixes moved the tree under the run (exit 1).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tree_changed_by_fix: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +284,7 @@ mod tests {
             local_sufficient: true,
             advisory: false,
             missing_tool: None,
+            tree_changed_by_fix: false,
         };
         let text = serde_json::to_string_pretty(&report).expect("serialize");
         let back: RunReport = serde_json::from_str(&text).expect("parse");
@@ -340,6 +344,7 @@ mod tests {
             local_sufficient: true,
             advisory: false,
             missing_tool: None,
+            tree_changed_by_fix: false,
         };
         let report_path = run_dir.join("report.json");
         let text = serde_json::to_string_pretty(&report).expect("serialize");

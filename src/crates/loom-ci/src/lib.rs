@@ -9,6 +9,7 @@
 mod config;
 mod detect;
 mod exec;
+mod hooks;
 mod report;
 mod run;
 
@@ -17,6 +18,10 @@ pub use config::{
 };
 pub use detect::{bootstrap, detect, BootstrapReport, Detection, Evidence};
 pub use exec::{missing_tool, which};
+pub use hooks::{
+    hook_script, hook_status, install, remove, InstallReport, RemoveReport, INSTALLABLE,
+    MANAGED_MARKER,
+};
 pub use report::{
     sha256_hex, tree_fingerprint, tree_id, verify_attestation, Attestation, JobReport, RunReport,
     TreeFingerprint, VerifyOutcome,

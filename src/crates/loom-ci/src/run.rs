@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 
 use crate::config::{ci_path, CiFile, Job};
 use crate::exec::{self, SpawnSpec};
-use crate::report::{sha256_hex, tree_fingerprint, Attestation, JobReport, RunReport};
+use crate::report::{sha256_hex, tree_fingerprint, tree_id, Attestation, JobReport, RunReport};
 use loom_core::compact_utc;
 
 /// Exit codes from `doc/16` §7.5.
@@ -27,6 +27,10 @@ pub struct RunRequest<'a> {
     pub profile: &'a str,
     pub keep_going: bool,
     pub fix: bool,
+    /// Run the profile's `fix_argv`s first, then the checks, and fail when
+    /// the tree moved (`hooks_fix_safe`, `doc/16` §7.7). Never combined
+    /// with `fix` — that mode is the explicit `--fix` path.
+    pub pre_fix: bool,
     pub now_ms: u64,
 }
 
@@ -53,6 +57,9 @@ pub struct RunOutcome {
     pub missing_tool: Option<String>,
     /// `git diff --stat` after `--fix`, when git could produce one.
     pub diff_stat: Option<String>,
+    /// Safe fixes moved the working tree after the run fingerprint: the
+    /// hook must stop and ask for a fresh `git add` (`doc/16` §7.7).
+    pub fixes_changed: bool,
     pub exit_code: i32,
 }
 
@@ -63,6 +70,7 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
         profile,
         keep_going,
         fix,
+        pre_fix,
         now_ms,
     } = request;
 
@@ -76,7 +84,7 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
     let log_dir = root.join(".loom").join("ci").join(&run_id);
     fs::create_dir_all(&log_dir).with_context(|| format!("create {}", log_dir.display()))?;
 
-    let tree = tree_fingerprint(root);
+    let start_tree = tree_fingerprint(root);
     let ci_toml_sha256 = fs::read(ci_path(root)).ok().as_deref().map(sha256_hex);
 
     let started = Instant::now();
@@ -98,6 +106,56 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
     let mut executions: Vec<JobExecution> = Vec::new();
     let mut missing_tool: Option<String> = None;
     let mut stop = false;
+    let mut fixes_changed = false;
+
+    // `hooks_fix_safe`: apply safe fixes before the checks. The report pins
+    // the tree the checks actually ran on, and a tree that moved under the
+    // run fails it — staged content would differ from checked content.
+    if pre_fix && !fix {
+        for job in selected
+            .iter()
+            .filter(|job| job.fix_safe && job.fix_argv.is_some())
+        {
+            if stop {
+                break;
+            }
+            let runner = file.runner.as_ref().map(|runner| runner.argv.as_slice());
+            let fix_argv = job.fix_argv.as_ref().expect("filtered");
+            if let Some(tool) = exec::missing_tool(runner, &fix_argv[0], &job.required_tools) {
+                missing_tool = Some(tool);
+                break;
+            }
+            let fix_log = log_dir.join(format!("{}.fix.log", job.id));
+            let outcome = execute(root, job, runner, fix_argv, &fix_log)?;
+            let passed = !outcome.timed_out && outcome.exit == Some(0);
+            executions.push(JobExecution {
+                report: JobReport {
+                    id: format!("{}.fix", job.id),
+                    argv: fix_argv.clone(),
+                    cwd: job.cwd.clone().unwrap_or_else(|| ".".to_string()),
+                    exit: outcome.exit,
+                    signal: outcome.signal,
+                    timed_out: outcome.timed_out,
+                    duration_ms: outcome.duration_ms,
+                    log_path: rel_log(root, &fix_log),
+                    log_sha256: hash_file(&fix_log),
+                    fixed: false,
+                },
+                summary: outcome.summary,
+                passed,
+            });
+            if !passed {
+                stop = true;
+            }
+        }
+        let after_tree = tree_fingerprint(root);
+        fixes_changed = tree_id(&start_tree) != tree_id(&after_tree);
+    }
+    let tree = if pre_fix && !fix {
+        tree_fingerprint(root)
+    } else {
+        start_tree
+    };
 
     for job in selected {
         if stop {
@@ -179,7 +237,8 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
         EXIT_NEEDS_HUMAN
     } else if any_timeout {
         EXIT_TIMEOUT
-    } else if !failed.is_empty() {
+    } else if !failed.is_empty() || fixes_changed {
+        // A moved tree blocks with exit 1: `git add` first (§7.7).
         EXIT_FAILED
     } else {
         EXIT_OK
@@ -201,6 +260,7 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
         local_sufficient,
         advisory: false,
         missing_tool: missing_tool.clone(),
+        tree_changed_by_fix: fixes_changed,
     };
 
     let report_path = log_dir.join("report.json");
@@ -228,6 +288,7 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
         executions,
         missing_tool,
         diff_stat,
+        fixes_changed,
         exit_code,
     })
 }
@@ -319,7 +380,7 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::Job;
-    use crate::report::{tree_id, TreeFingerprint};
+    use crate::report::TreeFingerprint;
     use std::collections::BTreeMap;
 
     fn job(id: &str, argv: Vec<&str>, needs: Vec<&str>) -> Job {
@@ -378,6 +439,7 @@ mod tests {
             profile: "fast",
             keep_going: false,
             fix: false,
+            pre_fix: false,
             now_ms: 1_795_180_800_000,
         })
         .expect("run");
@@ -423,6 +485,7 @@ mod tests {
             profile: "fast",
             keep_going: false,
             fix: false,
+            pre_fix: false,
             now_ms: 0,
         })
         .expect("run");
@@ -435,6 +498,7 @@ mod tests {
             profile: "fast",
             keep_going: true,
             fix: false,
+            pre_fix: false,
             now_ms: 1,
         })
         .expect("run");
@@ -454,6 +518,7 @@ mod tests {
             profile: "fast",
             keep_going: false,
             fix: false,
+            pre_fix: false,
             now_ms: 0,
         })
         .expect("run");
@@ -474,6 +539,7 @@ mod tests {
             profile: "fast",
             keep_going: false,
             fix: false,
+            pre_fix: false,
             now_ms: 0,
         })
         .expect("run");
@@ -506,6 +572,7 @@ mod tests {
             profile: "fast",
             keep_going: false,
             fix: true,
+            pre_fix: false,
             now_ms: 0,
         })
         .expect("run");
@@ -544,6 +611,7 @@ mod tests {
             profile: "nope",
             keep_going: false,
             fix: false,
+            pre_fix: false,
             now_ms: 0,
         })
         .expect_err("unknown profile");

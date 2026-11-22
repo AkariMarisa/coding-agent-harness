@@ -18,10 +18,21 @@ pub fn ci(project: &loom_store::Project, command: CiCommand, format: Format) -> 
             keep_going,
             fix,
             json,
-        } => run_profile(project, profile.as_deref(), keep_going, fix, json, format),
+            from_hook,
+        } => run_profile(
+            project,
+            profile.as_deref(),
+            keep_going,
+            fix,
+            from_hook,
+            json,
+            format,
+        ),
         CiCommand::Doctor { json } => doctor(project, json, format),
         CiCommand::Report { run_id, json } => report(project, run_id.as_deref(), json, format),
         CiCommand::VerifyAttest { path, json } => verify_attest(project, &path, json, format),
+        CiCommand::InstallHooks { profiles, force } => install_hooks(project, &profiles, force),
+        CiCommand::RemoveHooks => remove_hooks(project),
     }
 }
 
@@ -30,21 +41,49 @@ fn run_profile(
     profile: Option<&str>,
     keep_going: bool,
     fix: bool,
+    from_hook: bool,
     json: bool,
     format: Format,
 ) -> Result<i32> {
     let config = project.load_config()?;
-    let ci_file = loom_ci::load_ci_file(&project.root)
-        .map_err(|error| anyhow::anyhow!(error))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no {} — run `loom ci plan` (or `loom init`) first",
-                loom_ci::CI_CONFIG_NAME
-            )
-        })?;
+    let as_json = json || matches!(format, Format::Json);
     let profile = profile
         .map(str::to_owned)
         .unwrap_or_else(|| config.ci.default_profile.clone());
+
+    // `doc/16` §7.7 fail-open: a hook must never strand a fresh clone on an
+    // unusable configuration — warn, record nothing, let the commit through.
+    let ci_file = match loom_ci::load_ci_file(&project.root).map_err(|error| anyhow::anyhow!(error))
+    {
+        Ok(Some(file)) => file,
+        Ok(None) => {
+            if from_hook {
+                eprintln!(
+                    "loom: warning: no {} — fails open (commit allowed, not evidence)",
+                    loom_ci::CI_CONFIG_NAME
+                );
+                return Ok(0);
+            }
+            anyhow::bail!(
+                "no {} — run `loom ci plan` (or `loom init`) first",
+                loom_ci::CI_CONFIG_NAME
+            );
+        }
+        Err(error) => {
+            if from_hook {
+                eprintln!("loom: warning: invalid CI config ({error}) — fails open");
+                return Ok(0);
+            }
+            return Err(error);
+        }
+    };
+    if !ci_file.profiles.contains_key(&profile) {
+        if from_hook {
+            eprintln!("loom: warning: unknown profile {profile:?} — fails open");
+            return Ok(0);
+        }
+        anyhow::bail!("unknown profile: {profile}");
+    }
 
     let outcome = loom_ci::run(loom_ci::RunRequest {
         root: &project.root,
@@ -52,13 +91,27 @@ fn run_profile(
         profile: &profile,
         keep_going,
         fix,
+        pre_fix: from_hook && config.ci.hooks_fix_safe && !fix,
         now_ms: loom_store::now_ms(),
     })?;
+
+    // An absent runner is fail-open for hooks too (§7.7); a missing plain
+    // job tool is not — that blocks with exit 2.
+    if from_hook {
+        if let (Some(runner), Some(missing)) =
+            (ci_file.runner.as_ref(), outcome.missing_tool.as_deref())
+        {
+            if runner.argv.first().map(String::as_str) == Some(missing) {
+                eprintln!("loom: warning: runner {missing:?} unavailable — fails open (recorded)");
+                return Ok(0);
+            }
+        }
+    }
 
     // `doc/16` §7.9: failures are resident items, green resolves them.
     link_attention(project, &outcome)?;
 
-    if json || matches!(format, Format::Json) {
+    if as_json {
         println!(
             "{}",
             serde_json::to_string_pretty(&outcome.report).context("serialize CI report")?
@@ -66,7 +119,47 @@ fn run_profile(
     } else {
         print!("{}", render_run(&outcome));
     }
+    if outcome.fixes_changed {
+        // The checks may have passed, but the tree moved under them: staged
+        // content would differ from checked content (`doc/16` §7.7).
+        let message = "safe fixes changed the working tree — run `git add` (or `git add -A`) and retry; nothing was staged or committed";
+        if as_json {
+            eprintln!("loom: {message}");
+        } else {
+            println!("{message}");
+        }
+    }
     Ok(outcome.exit_code)
+}
+
+/// `loom ci install-hooks --profiles ...`: explicit install only; foreign
+/// hooks are refused unless `--force` backs them up (`doc/16` §7.7).
+fn install_hooks(project: &loom_store::Project, profiles: &str, force: bool) -> Result<i32> {
+    let config = project.load_config()?;
+    let profiles: Vec<String> = profiles
+        .split(',')
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+    if profiles.is_empty() {
+        anyhow::bail!("--profiles needs at least one of pre-commit,pre-push");
+    }
+    let report = loom_ci::install(&project.root, &profiles, force, config.ci.hooks_fail_open)
+        .map_err(|error| anyhow::anyhow!(error))?;
+    for message in &report.messages {
+        println!("{message}");
+    }
+    // A foreign hook needs a human decision: exit 2, not a silent overwrite.
+    Ok(if report.refused.is_empty() { 0 } else { 2 })
+}
+
+/// `loom ci remove-hooks`: removes what Loom wrote, keeps what it did not.
+fn remove_hooks(project: &loom_store::Project) -> Result<i32> {
+    let report = loom_ci::remove(&project.root).map_err(|error| anyhow::anyhow!(error))?;
+    for message in &report.messages {
+        println!("{message}");
+    }
+    Ok(0)
 }
 
 /// `doc/16` §7.9: a failed job opens a `review` item keyed
@@ -343,7 +436,10 @@ fn doctor(project: &loom_store::Project, json: bool, format: Format) -> Result<i
                 "stack": detection.evidence,
                 "missing_tools": missing,
                 "last_run": last_run,
-                "hooks": "not_installed",
+                "hooks": loom_ci::hook_status(&project.root)
+                    .into_iter()
+                    .map(|(name, state)| serde_json::json!({"name": name, "state": state}))
+                    .collect::<Vec<_>>(),
             }))?
         );
     } else {
@@ -384,7 +480,15 @@ fn doctor(project: &loom_store::Project, json: bool, format: Format) -> Result<i
             ),
             None => println!("last run: none yet"),
         }
-        println!("hooks:    not installed — `loom ci install-hooks` lands with the hooks phase");
+        let hooks = loom_ci::hook_status(&project.root);
+        println!(
+            "hooks:    {}",
+            hooks
+                .iter()
+                .map(|(name, state)| format!("{name}={state}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
     }
     // Exit 2 = needs human handling (missing config or tools), per §7.5.
     Ok(if ok { 0 } else { 2 })

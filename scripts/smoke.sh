@@ -587,6 +587,7 @@ version = 1
 fast = ["probe", "always-fail"]
 green = ["probe"]
 missing = ["broken"]
+pre-commit = ["fixroot"]
 
 [[jobs]]
 id = "probe"
@@ -603,6 +604,13 @@ timeout_s = 10
 [[jobs]]
 id = "broken"
 argv = ["definitely-not-a-real-tool-xyz"]
+timeout_s = 10
+
+[[jobs]]
+id = "fixroot"
+argv = ["sh", "-c", "test -f root-fixed.txt"]
+fix_argv = ["sh", "-c", "echo fixed > root-fixed.txt"]
+fix_safe = true
 timeout_s = 10
 EOF
 # First failure stops the run (exit 1) and opens a ci review item.
@@ -711,5 +719,103 @@ test "$code" = "1" || {
     exit 1
 }
 rm /work/.smoke/tree-changer.txt
+
+# --- git hooks (doc/16 §7.7): explicit install, refusal, fail-open, remove ---
+loom ci install-hooks --profiles pre-commit
+grep -q 'loom-managed' /work/.smoke/.git/hooks/pre-commit || {
+    echo "installed hook must carry the managed marker" >&2
+    exit 1
+}
+grep -q -- '--profile pre-commit --from-hook' /work/.smoke/.git/hooks/pre-commit || {
+    echo "a hook must only call the public CLI" >&2
+    exit 1
+}
+# Reinstalling a managed hook is an idempotent refresh.
+loom ci install-hooks --profiles pre-commit > /dev/null
+# A foreign hook is refused (exit 2) and left untouched …
+printf '#!/bin/sh\nexit 0\n' > /work/.smoke/.git/hooks/pre-push
+code=0
+loom ci install-hooks --profiles pre-push > /dev/null 2>&1 || code=$?
+test "$code" = "2" || {
+    echo "expected exit 2 for a foreign hook, got $code" >&2
+    exit 1
+}
+if grep -q 'loom-managed' /work/.smoke/.git/hooks/pre-push; then
+    echo "a foreign hook must not be overwritten without --force" >&2
+    exit 1
+fi
+# … and --force backs it up first.
+loom ci install-hooks --profiles pre-push --force > /dev/null
+ls /work/.smoke/.git/hooks/pre-push.*.bak > /dev/null 2>&1 || {
+    echo "--force must back up the foreign hook" >&2
+    exit 1
+}
+grep -q 'loom-managed' /work/.smoke/.git/hooks/pre-push
+# doctor reports hook state as managed/foreign/absent.
+code=0
+loom ci doctor --json > /work/.smoke/.loom/ci-doctor2.json || code=$?
+grep -q '"state": "managed"' /work/.smoke/.loom/ci-doctor2.json || {
+    echo "doctor must report managed hooks" >&2
+    exit 1
+}
+# With a PATH shim the hook really runs its profile: a red check blocks the
+# commit (exit 1) and no fix runs without hooks_fix_safe.
+mkdir -p /work/.smoke/.bin
+printf '#!/bin/sh\nexec cargo run -q --manifest-path /work/src/Cargo.toml -p loom-cli -- "$@"\n' > /work/.smoke/.bin/loom
+chmod +x /work/.smoke/.bin/loom
+test ! -f /work/.smoke/root-fixed.txt
+code=0
+(cd /work/.smoke && PATH="/work/.smoke/.bin:$PATH" sh .git/hooks/pre-commit > /dev/null 2>&1) || code=$?
+test "$code" = "1" || {
+    echo "expected a red check to block (exit 1), got $code" >&2
+    exit 1
+}
+test ! -f /work/.smoke/root-fixed.txt || {
+    echo "no fix may run while hooks_fix_safe is off" >&2
+    exit 1
+}
+# hooks_fix_safe: fix first, re-check, but the moved tree still blocks with
+# a `git add` hint — and nothing is ever staged.
+loom config set ci.hooks_fix_safe true
+code=0
+(cd /work/.smoke && PATH="/work/.smoke/.bin:$PATH" sh .git/hooks/pre-commit > /dev/null 2> /work/.smoke/.loom/hook-fix.err) || code=$?
+test "$code" = "1" || {
+    echo "expected a moved tree to block (exit 1), got $code" >&2
+    exit 1
+}
+test -f /work/.smoke/root-fixed.txt || {
+    echo "pre-fix must run fix_argv before the checks" >&2
+    exit 1
+}
+grep -q 'git add' /work/.smoke/.loom/hook-fix.err || {
+    echo "expected a fresh git add hint" >&2
+    exit 1
+}
+test -z "$(git -C /work/.smoke status --porcelain | grep '^[MAD]')" || {
+    echo "hooks must never stage anything" >&2
+    exit 1
+}
+# hooks_fail_open = false flips the generated script: no loom on PATH blocks.
+loom config set ci.hooks_fail_open false
+loom ci install-hooks --profiles pre-commit > /dev/null
+code=0
+PATH="/nonexistent" /bin/sh /work/.smoke/.git/hooks/pre-commit > /dev/null 2>&1 || code=$?
+test "$code" = "1" || {
+    echo "hooks_fail_open=false must block without loom, got $code" >&2
+    exit 1
+}
+# LOOM_CI_SKIP=1 wins over everything (local diagnostics only, not evidence).
+code=0
+PATH="/nonexistent" LOOM_CI_SKIP=1 /bin/sh /work/.smoke/.git/hooks/pre-commit > /dev/null 2>&1 || code=$?
+test "$code" = "0" || {
+    echo "LOOM_CI_SKIP=1 must skip the hook, got $code" >&2
+    exit 1
+}
+# remove-hooks takes Loom's hooks only.
+loom ci remove-hooks > /dev/null
+test ! -f /work/.smoke/.git/hooks/pre-commit || {
+    echo "remove-hooks must delete the managed hook" >&2
+    exit 1
+}
 
 echo "SMOKE_OK"
