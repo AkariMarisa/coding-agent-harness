@@ -263,7 +263,7 @@ mkdir -p /work/.smoke/.opencode/skills/smoke-skill
 cat > /work/.smoke/.opencode/skills/smoke-skill/SKILL.md <<'EOF'
 ---
 name: Smoke Skill
-description: fixture skill for the smoke run
+description: "Use when the smoke needs a declared skill; fixture only. Do not use for real work."
 ---
 # Smoke Skill
 
@@ -575,6 +575,36 @@ grep -q '"auto": true' /work/.smoke/.loom/recommend.json || {
     echo "expected the matching declared skill to be auto-eligible" >&2
     exit 1
 }
+# L0 static checks + lock (doc/15 §3.7, doc/16 §9.3): bootstrap the lock,
+# verify green, then prove a tampered body is caught by the pin. The repo
+# license file is part of the provenance gate.
+echo "smoke license" > /work/.smoke/LICENSE
+loom skill verify --write-lock --format json > /work/.smoke/.loom/skill-verify1.json || {
+    echo "expected verify --write-lock to pass on the fixture" >&2
+    exit 1
+}
+grep -q '"ok": true' /work/.smoke/.loom/skill-verify1.json
+test -f /work/.smoke/.opencode/skills.lock || {
+    echo "expected skills.lock to be written" >&2
+    exit 1
+}
+echo tampered >> /work/.smoke/.opencode/skills/smoke-skill/SKILL.md
+code=0
+loom skill verify --format json > /work/.smoke/.loom/skill-verify2.json || code=$?
+test "$code" = "1" || {
+    echo "expected verify to exit 1 after tampering, got $code" >&2
+    exit 1
+}
+grep -q 'sha256 drifted' /work/.smoke/.loom/skill-verify2.json || {
+    echo "expected a sha256 drift finding" >&2
+    exit 1
+}
+# Re-pinning after review is the documented recovery path.
+loom skill verify --write-lock --format json > /work/.smoke/.loom/skill-verify3.json || {
+    echo "expected re-lock to pass" >&2
+    exit 1
+}
+grep -q '"ok": true' /work/.smoke/.loom/skill-verify3.json
 loom ci plan --json | grep -q '"sufficient": true' || {
     echo "expected plan to detect the Rust fixture" >&2
     exit 1

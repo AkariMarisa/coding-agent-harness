@@ -604,6 +604,7 @@ dependencies = [
  "anyhow",
  "ignore",
  "loom-core",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

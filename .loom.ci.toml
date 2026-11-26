@@ -8,7 +8,7 @@ version = 1
 argv = ["./scripts/dev.sh"]
 
 [profiles]
-pre-commit = ["fmt-fix"]
+pre-commit = ["fmt-fix", "skills-check"]
 pre-push = ["fmt-check", "clippy", "test"]
 fast = ["fmt-check", "clippy"]
 full = ["fmt-check", "clippy", "test", "build"]
@@ -24,6 +24,11 @@ id = "fmt-fix"
 argv = ["cargo", "fmt", "--all", "--", "--check"]
 fix_argv = ["cargo", "fmt", "--all"]
 fix_safe = true
+timeout_s = 120
+
+[[jobs]]
+id = "skills-check"
+argv = ["./scripts/check-skills.sh"]
 timeout_s = 120
 
 [[jobs]]

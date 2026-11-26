@@ -6,14 +6,19 @@
 //! governs what exists, what is trusted, and what the packet may advertise.
 
 mod catalog;
+mod frontmatter;
+mod lock;
 mod profile;
 mod recommend;
+mod verify;
 
 pub use catalog::{
     catalog_path, load_catalog, Catalog, CatalogSkill, SkillStatus, Triggers, CATALOG_REL,
     LICENSE_ALLOWLIST,
 };
+pub use lock::{load_lock, lock_path, write_lock, LockEntry, SkillsLock, LOCK_REL};
 pub use profile::{profile_path, scan, ScanOutcome, StackProfile, STACK_PROFILE_NAME};
 pub use recommend::{
     recommend, RecommendInput, Suggestion, AUTO_THRESHOLD, MAX_AUTO, MAX_SUGGESTIONS,
 };
+pub use verify::{verify, Finding, Level, VerifyOutcome, SKILLS_DIR_REL};

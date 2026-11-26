@@ -13,7 +13,48 @@ pub fn skill(project: &loom_store::Project, command: SkillCommand, format: Forma
     match command {
         SkillCommand::Scan => scan_profile(project, format),
         SkillCommand::Recommend { task } => recommend(project, &task, format),
+        SkillCommand::Verify { write_lock } => verify(project, write_lock, format),
     }
+}
+
+/// `loom skill verify`: the L0 gate (`doc/15` §3.7, `doc/16` §9.3).
+/// Exit 0 = green (warnings allowed), 1 = findings, 4 = configuration error.
+fn verify(project: &loom_store::Project, write_lock: bool, format: Format) -> Result<i32> {
+    let outcome =
+        loom_skill::verify(&project.root, write_lock).map_err(|error| anyhow::anyhow!(error))?;
+    match format {
+        Format::Json => {
+            println!("{}", serde_json::to_string_pretty(&outcome)?);
+        }
+        Format::Pretty => {
+            let fails = outcome
+                .findings
+                .iter()
+                .filter(|finding| finding.level == loom_skill::Level::Fail)
+                .count();
+            let warns = outcome.findings.len() - fails;
+            let state = if outcome.ok { "PASS" } else { "FAIL" };
+            println!(
+                "skills verify: {state} — {} skill(s), {fails} failure(s), {warns} warning(s)",
+                outcome.checked
+            );
+            if outcome.lock_written > 0 {
+                println!(
+                    "  lock: wrote {} entries to {}",
+                    outcome.lock_written,
+                    loom_skill::LOCK_REL
+                );
+            }
+            for finding in &outcome.findings {
+                let marker = match finding.level {
+                    loom_skill::Level::Fail => "fail",
+                    loom_skill::Level::Warn => "warn",
+                };
+                println!("  {marker} {}: {}", finding.skill, finding.message);
+            }
+        }
+    }
+    Ok(if outcome.ok { 0 } else { 1 })
 }
 
 /// `loom skill recommend --task T-…`: score the catalog against the repo

@@ -551,6 +551,12 @@ enum SkillCommand {
         #[arg(long)]
         task: String,
     },
+    /// Run the L0 static checks against the catalog and skills.lock.
+    Verify {
+        /// Refresh skills.lock from disk + catalog first (reviewable diff).
+        #[arg(long)]
+        write_lock: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
