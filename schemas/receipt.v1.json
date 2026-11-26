@@ -109,7 +109,7 @@
       "type": "array",
       "maxItems": 8,
       "items": {"type": "string", "minLength": 1, "maxLength": 64},
-      "description": "Skill ids injected into this run's packet, copied from the dispatched task snapshot by `loom verify`; absent when none were declared."
+      "description": "Skill ids advertised in this run's packet (index lines; bodies on demand), copied from the dispatched task snapshot by `loom verify`; absent when none were declared."
     }
   }
 }

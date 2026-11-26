@@ -7,6 +7,7 @@ mod capability;
 mod config;
 mod envelope;
 mod event;
+mod frontmatter;
 mod limits;
 mod questions;
 mod receipt;
@@ -32,6 +33,7 @@ pub use envelope::{
     PROTOCOL_VERSION,
 };
 pub use event::{Event, EventFilter, EventType, EVENT_VERSION};
+pub use frontmatter::{parse_frontmatter, Frontmatter};
 pub use limits::Limits;
 pub use questions::{
     Answer, AnswersFile, Question, QuestionOption, QuestionScope, QuestionsFile, ANSWERS_VERSION,

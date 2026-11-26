@@ -217,7 +217,8 @@ pub struct Receipt {
     /// Parsed from the report for review/judgment tasks; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<crate::verdict::Verdict>,
-    /// Skill ids injected into this run's packet (`doc/15` §12.3): copied
+    /// Skill ids advertised in this run's packet — index lines, bodies on
+    /// demand (`doc/15` §3.6): copied
     /// from the dispatched task snapshot by `loom verify`, so it records what
     /// was injected, not what the spec happens to say later.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

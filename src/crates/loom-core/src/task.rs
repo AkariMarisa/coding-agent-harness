@@ -207,8 +207,9 @@ pub struct TaskSpec {
     pub workspace: TaskWorkspace,
     pub inputs: Vec<TaskInput>,
     /// Declared skill ids (directories under `.opencode/skills/`); the context
-    /// compiler injects each `SKILL.md` body into the packet — loading is
-    /// declaration, never model discovery (`doc/15` §12.3).
+    /// compiler advertises each as an index line and the body is read on
+    /// demand (`doc/15` §3.6) — loading is declaration, never model
+    /// discovery (`doc/15` §12.3).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
     pub constraints: TaskConstraints,

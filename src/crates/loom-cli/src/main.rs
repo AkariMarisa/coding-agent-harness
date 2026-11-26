@@ -557,6 +557,14 @@ enum SkillCommand {
         #[arg(long)]
         write_lock: bool,
     },
+    /// Read a declared skill's body on demand (4KB cap, plain text).
+    Show {
+        /// Skill id as declared in TaskSpec.skills.
+        id: String,
+        /// Structured output instead of the plain body.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

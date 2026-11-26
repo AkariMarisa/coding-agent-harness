@@ -301,8 +301,16 @@ loom context compile T-20261106-009 --out /work/.smoke/skills-ctx --format json 
     | grep -q '"skills"' || {
     echo "expected manifest to record injected skills" >&2; exit 1;
 }
-grep -q 'SKILL_BODY_MARKER' /work/.smoke/skills-ctx/packet.md || {
-    echo "expected skill body injected into the packet" >&2; exit 1;
+# Progressive disclosure (doc/15 §3.6): the packet carries the index line
+# only; the body arrives on demand via `loom skill show`.
+grep -q '## smoke-skill |' /work/.smoke/skills-ctx/packet.md || {
+    echo "expected skill index line in the packet" >&2; exit 1;
+}
+if grep -q 'SKILL_BODY_MARKER' /work/.smoke/skills-ctx/packet.md; then
+    echo "skill body must not be injected into the packet" >&2; exit 1;
+fi
+loom skill show smoke-skill | grep -q 'SKILL_BODY_MARKER' || {
+    echo "expected loom skill show to deliver the body" >&2; exit 1;
 }
 
 # Declared but absent → compile fails fast, never ships a skill-less packet.

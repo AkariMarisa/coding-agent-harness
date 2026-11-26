@@ -587,6 +587,8 @@ Visibility can be completed independently of any real model: even with no agent 
 
 ## 3. Problem three: skills governance
 
+> Status: **partially implemented (2026-11-26)** — the v1 subset of Scanner→Catalog→Resolver→Installer→Runtime, trimmed by [16](16-runtime-governance-adoption-assessment.md) §9: `loom skill scan` (zero-LLM profile → `.loom/stack-profile.json`, no-evidence-no-tag invariant), tracked `.opencode/skills.catalog.json` + `loom skill recommend` (§3.4 scoring; two pinned interpretations — `token_cost` in hundreds of tokens and an auto threshold of 4.0), tracked `.opencode/skills.lock` (16 §9.2 shape) + `loom skill verify` (L0: frontmatter, trigger budgets `description ≤400` / total `≤1500` / "do not use for", body ≤5k tokens, no escaping symlinks, no executable files, network/secret/injection patterns, sha against the lock, third-party license allowlist + `THIRD_PARTY_NOTICES.md` coverage) + `scripts/check-skills.sh` as the dogfood `skills-check` job, and progressive disclosure (the packet carries only the index line; bodies via `loom skill show` capped at 4KB). **Deviations and deferrals**: the lock lives at `.opencode/skills.lock` and the `add`/`remove`/`update` install flow plus `.loom/skills/` are deferred per 16 §9.2 (all skills are committed in-repo; no external source exists); a frontmatter `name` different from the directory id is a warning, not a failure (the pilot uses human titles); `loom skill stats`, L2 promotion and the networked catalog stay deferred (§3.10).
+
 ### 3.1 The problem
 
 A large number of skills are unvalidated; global installation means:
@@ -1098,7 +1100,7 @@ Conclusion: **do detection + `.loom.ci.toml` + sequential `loom ci run` + doctor
 - [x] The report/attestation contains tree, argv, tool versions, exit codes; verification passes for the same tree and fails for a different tree (2026-11-22; per the locked field list in 16 §7.8 — `tool_versions` is not in it and is deliberately absent; `loom ci verify-attest` passes on the same tree and fails on a changed or newly untracked file).
 - [x] v1 does not skip server jobs using local attestations; only after signed/trusted runners exist may deterministic jobs with `local_sufficient = true` be skipped, and security/release/matrix jobs never (2026-11-22; by construction — v1 has no skip mechanism, and `verify-attest` prints `unsigned — evidence, not a trust boundary`).
 - [ ] The review job has token/time limits, is advisory by default, produces structured findings, and has no network.
-- [ ] `kind = "skill"` can only load skills that are in the lock and passed static checks, and cannot turn off a gate.
+- [ ] `kind = "skill"` can only load skills that are in the lock and passed static checks, and cannot turn off a gate (the lock + `loom skill verify` engine landed 2026-11-26; the `kind=skill` job type itself waits for the CI review/skill jobs).
 - [x] CI failures open attention `review`/`operation` items; they auto-resolve after a success on the same tree (2026-11-22; `ci:<job>:<tree>` review items with green-resolve, `env:missing-tool:` operation from run/doctor, smoke-verified).
 - [x] `loom verify` behavior is unchanged and still treats only TaskSpec acceptance as the task authority (2026-11-22; the CI work never touches verify — its smoke rings stay green).
 
@@ -1212,7 +1214,7 @@ Notes:
 - [x] When `hooks_fix_safe` is in effect, pre-commit auto-fixes safe items and re-runs; if the tree changed it asks for a fresh `git add`, never staging/committing (2026-11-22; same mechanism, smoke-verified end to end through the generated hook).
 - [x] `loom ci install-hooks` is idempotent; it refuses when a non-Loom hook exists, and `--force` backs up first; no promise of recording `--no-verify` (2026-11-22; managed hooks refresh in place, foreign hooks exit 2 until `--force` writes `<hook>.<ts>.bak`, `remove-hooks` deletes only marked hooks — smoke-verified; `--no-verify` stays unobservable by design).
 - [x] The report/attestation contains tree, argv, tool versions, exit codes; verification passes for the same tree and fails for a different tree; v1 does not skip server jobs on that basis (2026-11-22; `tool_versions` is absent by design — it is not in 16 §7.8's locked field list; no skip mechanism exists).
-- [ ] The review job has token/time limits, is advisory by default, produces structured findings, and has no network; `kind=skill` can only load skills in the lock that passed static checks.
+- [ ] The review job has token/time limits, is advisory by default, produces structured findings, and has no network; `kind=skill` can only load skills in the lock that passed static checks (lock + verify engine landed 2026-11-26; the review job itself is still pending).
 - [ ] A `needs_input` receipt after `loom verify` has status `needs_input`, **produces no `task.failed`**, and does not raise the escalation count.
 - [x] `task.needs_input` automatically opens a `question` attention item; `loom answer` resolves it automatically (2026-11-20; events + `.loom/inbox.json` view — the `loom inbox` display lands with §2.2's command).
 - [x] `loom doctor` opens an `operation` item when a tool is missing; `loom ci` opens a `review`/`operation` item on failure; items auto-resolve when the condition clears (doctor linkage 2026-11-21 — FAIL opens `doctor:<check>`, PASS resolves it; CI linkage 2026-11-22 — `ci:<job>:<tree>` review items resolve when the job is green on that tree, `env:missing-tool:` operation on a missing tool).
@@ -1226,8 +1228,8 @@ Notes:
 - [ ] The same change made with a patch vs. a whole-file `write` shows a quantifiable gap in output tokens.
 - [ ] `loom churn stats --by model` prints token/cost on the first screen and only `write_passes` / `churn_ratio` on the second (validated with scripted data first).
 - [x] Every tag output by `loom skill scan` has an evidence file; no evidence, no tag (2026-11-26; invariant enforced inside `detect()`, fixture-tested, smoke-verified on the Rust fixture).
-- [ ] `loom skill add` writes only the project-level directory and `skills.lock`; a skill that fails static checks is refused.
-- [ ] When a skill is loaded, only the index line is injected; the body is read on demand via `loom skill show`, under the 4KB/8KB budget.
+- [ ] `loom skill add` writes only the project-level directory and `skills.lock`; a skill that fails static checks is refused (deferred 2026-11-26 per 16 §9.2 — the install flow has no external source yet; skills are committed in-repo and the lock covers integrity. Revisit when a second adapter needs Loom-side loading).
+- [x] When a skill is loaded, only the index line is injected; the body is read on demand via `loom skill show`, under the 4KB/8KB budget (2026-11-26; index = `id | trigger | tokens | path`, `show` caps at 4096 bytes, smoke asserts the body is absent from the packet and present via `show`).
 - [ ] Every new event is synced to the `loom-core` types, `schemas/event.v1.json`, `doc/03` §11.2, and at least one test.
 
 ---
@@ -1312,7 +1314,7 @@ Honest tradeoffs: steer is the cheapest in tokens but risks intent drift (and ma
 
 ### 12.3 Skills: dispatch by declaration, not by discovery
 
-> **Implementation status (2026-11-20, declaration path landed)**: `TaskSpec.skills: [id]` is implemented end to end — the context compiler injects each `<project>/.opencode/skills/<id>/SKILL.md` body into a `skills` packet section right after the task (own budget line: main/worker 4k, judgment 2k; a missing or oversized skill **fails the compile**, never ships a half-skill); reference files are listed by path, never inlined; the context manifest records the injected ids (the injection record), `loom verify` copies them onto `receipt.skills`, and the opencode preset appends `@skill-id` mentions on stdin — that last hop is implemented but **unverified** until the opencode canary runs (doc/14 blocker). The rules below stand; what is still pending is everything around §3: skills scan/on-demand discovery and promotion after validation.
+> **Implementation status (2026-11-20, declaration path landed)**: `TaskSpec.skills: [id]` is implemented end to end — the context compiler injects each `<project>/.opencode/skills/<id>/SKILL.md` body into a `skills` packet section right after the task (own budget line: main/worker 4k, judgment 2k; a missing or oversized skill **fails the compile**, never ships a half-skill); reference files are listed by path, never inlined; the context manifest records the injected ids (the injection record), `loom verify` copies them onto `receipt.skills`, and the opencode preset appends `@skill-id` mentions on stdin — that last hop is implemented but **unverified** until the opencode canary runs (doc/14 blocker). The rules below stand; the governance half of §3 landed on 2026-11-26 (scan, catalog, recommend, lock, verify, `show`, index-only packets — see the §3 status note); promotion after L2 evaluation remains pending.
 
 Loom already ships the correct precedent: `default_prompt_role` maps `TaskSpec.role` to a prompt deterministically in code. A sub-agent that silently misses its skill (observed on Codex CLI) is what happens when instruction dispatch is left to model discovery.
 

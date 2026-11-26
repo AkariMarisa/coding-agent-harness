@@ -77,7 +77,7 @@
       "type": "array",
       "maxItems": 8,
       "items": {"type": "string", "minLength": 1, "maxLength": 64},
-      "description": "Skill ids whose SKILL.md bodies were injected into this packet; the injection record `loom verify` copies onto the receipt (doc/15 §12.3). Absent when none were declared."
+      "description": "Skill ids advertised in this packet as index lines — bodies are read on demand via `loom skill show` (doc/15 §3.6); the advertisement record `loom verify` copies onto the receipt. Absent when none were declared."
     },
     "notes": {"type": "array", "items": {"type": "string"}}
   }

@@ -586,6 +586,8 @@ review / verify 可以检查假设是否被后续证据推翻。这样“先继�
 
 ## 3. 问题三：skills 治理
 
+> 状态：**部分实现（2026-11-26）** —— 按 [16](16-runtime-governance-adoption-assessment.zh-CN.md) §9 裁剪后的 v1 子集：`loom skill scan`（零 LLM 画像 → `.loom/stack-profile.json`，无证据不出标签的不变量）、tracked `.opencode/skills.catalog.json` + `loom skill recommend`（§3.4 打分；两处已钉住的解释——`token_cost` 按百 token 计、自动载入阈值 4.0）、tracked `.opencode/skills.lock`（16 §9.2 形态）+ `loom skill verify`（L0：frontmatter、触发预算 `description ≤400`/总和 `≤1500`/"do not use for"、正文 ≤5k token、符号链接不越库、无可执行文件、网络/密钥/注入模式、sha 对锁、第三方许可白名单 + `THIRD_PARTY_NOTICES.md` 覆盖）+ `scripts/check-skills.sh` 作为 dogfood `skills-check` job，以及渐进披露（packet 只带索引行，正文经 `loom skill show` 4KB 封顶按需读）。**偏差与推迟**：lock 按 16 §9.2 放 `.opencode/skills.lock`，`add`/`remove`/`update` 安装流与 `.loom/skills/` 推迟（技能全部入库、无外部源）；frontmatter `name` 与目录 id 不一致记警告不判失败（pilot 用人类标题）；`loom skill stats`、L2 晋升与联网 catalog 同步仍推迟（§3.10）。
+
 ### 3.1 问题
 
 大量 skill 没有验证；全局安装会：
@@ -1097,7 +1099,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [x] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败。（2026-11-22；字段按 16 §7.8 锁定清单——`tool_versions` 不在其中、有意缺席；`loom ci verify-attest` 同树通过、改动或新增未跟踪文件即失败。）
 - [x] v1 不使用本地 attestation 跳过服务器 job；后续有签名/受信 runner 后，才只跳过 `local_sufficient = true` 的确定性 job，安全/发布/矩阵永远不跳过。（2026-11-22；构造上成立——v1 无任何跳过机制，`verify-attest` 明示 `unsigned — evidence, not a trust boundary`。）
 - [ ] review job 有 token/时间上限，默认 advisory，findings 结构化；无网络。
-- [ ] `kind = "skill"` 只能加载 lock 内、通过静态检查的 skill，不能关闭 gate。
+- [ ] `kind = "skill"` 只能加载 lock 内、通过静态检查的 skill，不能关闭 gate。（lock + `loom skill verify` 引擎 2026-11-26 已落地；`kind=skill` job 类型本身等 CI review/skill 作业。）
 - [x] CI 失败开 attention `review`/`operation` 事项；同 tree 成功后自动 resolve。（2026-11-22；`ci:<job>:<tree>` review 事项绿跑即 resolve，缺工具开 `env:missing-tool:` operation，smoke 验证。）
 - [x] `loom verify` 行为不变，仍只以 TaskSpec acceptance 为任务权威。（2026-11-22；CI 工作不触碰 verify，其 smoke 环保持绿。）
 
@@ -1211,7 +1213,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [x] `hooks_fix_safe` 生效时 pre-commit 自动修安全项并重跑；有改动时要求重新 `git add`，不自动 stage/commit。（2026-11-22；同一机制，经生成的 hook 端到端 smoke 验证。）
 - [x] `loom ci install-hooks` 幂等；已有非 Loom hook 时拒绝，`--force` 先备份；不承诺记录 `--no-verify`。（2026-11-22；托管 hook 原位刷新、外来 hook 在 `--force` 前 exit 2 并备份为 `<hook>.<ts>.bak`、`remove-hooks` 只删带标记的——smoke 验证；`--no-verify` 按设计不可观测。）
 - [x] 报告/attestation 含 tree、argv、工具版本、退出码；同 tree 校验通过，不同 tree 失败；v1 不据此跳过服务器 job。（2026-11-22；`tool_versions` 按 16 §7.8 锁定清单有意缺席；不存在任何跳过机制。）
-- [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。
+- [ ] review job 有 token/时间上限、默认 advisory、findings 结构化、无网络；`kind=skill` 只能加载 lock 内且通过静态检查的 skill。（lock + verify 引擎 2026-11-26 已落地；review job 本身仍待做。）
 - [ ] `needs_input` 回执经 `loom verify` 后状态为 `needs_input`，**不产生 `task.failed`**，不增加升级计数。
 - [x] `task.needs_input` 自动开 `question` attention 事项；`loom answer` 后自动 resolve。（2026-11-20；事件 + `.loom/inbox.json` 视图——`loom inbox` 展示随 §2.2 命令落地。）
 - [x] `loom doctor` 缺工具时开 `operation` 事项；`loom ci` 失败时开 `review`/`operation` 事项；条件解除后自动 resolve。（doctor 联动 2026-11-21——FAIL 开 `doctor:<check>`、PASS 自动 resolve；CI 联动 2026-11-22——`ci:<job>:<tree>` review 事项同树绿跑即 resolve，缺工具开 `env:missing-tool:` operation。）
@@ -1225,8 +1227,8 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [ ] 同一改动用 patch 与用整文件 `write` 的 output token 有可量化差距。
 - [ ] `loom churn stats --by model` 第一屏输出 token / 成本，第二屏才是 `write_passes` / `churn_ratio`（先用脚本化数据验证）。
 - [x] `loom skill scan` 输出的每个标签都有证据文件；无证据不出现。（2026-11-26；`detect()` 内强制该不变量，夹具单测 + Rust 夹具 smoke 验证。）
-- [ ] `loom skill add` 只写项目级目录与 `skills.lock`；未通过静态检查的 skill 拒绝安装。
-- [ ] 加载 skill 时只注入索引行；正文经 `loom skill show` 按需读取，受 4KB/8KB 预算。
+- [ ] `loom skill add` 只写项目级目录与 `skills.lock`；未通过静态检查的 skill 拒绝安装。（2026-11-26 按 16 §9.2 推迟——安装流暂无外部源；技能全部入库、lock 负责完整性。等第二个 adapter 需要 Loom 侧加载时再议。）
+- [x] 加载 skill 时只注入索引行；正文经 `loom skill show` 按需读取，受 4KB/8KB 预算。（2026-11-26；索引 = `id | trigger | tokens | path`，`show` 封顶 4096 字节，smoke 断言正文不在 packet、经 `show` 可取。）
 - [ ] 所有新增事件同步了 `loom-core` 类型、`schemas/event.v1.json`、`doc/03` §11.2 与至少一个测试。
 
 ---
@@ -1271,7 +1273,7 @@ agent 会重查几步前已经查到的事实——第 3 步答过的 `node --ve
 
 ## 12. 观测与声明式分派（来自其他工具的笔记）
 
-> 状态：**方向记录；§12.1 与 §12.3 已落地，其余未排期**（记录于 2026-11-15，来自使用其他工具——OpenCode、Codex CLI 的四条体验，映射到 Loom 架构上）。§12.1 已落地为 `loom top`（2026-11-20）；§12.3 已落地为 `TaskSpec.skills` 声明链路（2026-11-20——注入、manifest、回执；§3 周边的 skills 扫描/晋级仍待做）；§12.2 喂给 `questions.json` 协议（2026-11-18 已落地，见 §2.4）。
+> 状态：**方向记录；§12.1 与 §12.3 已落地，其余未排期**（记录于 2026-11-15，来自使用其他工具——OpenCode、Codex CLI 的四条体验，映射到 Loom 架构上）。§12.1 已落地为 `loom top`（2026-11-20）；§12.3 已落地为 `TaskSpec.skills` 声明链路（2026-11-20——注入、manifest、回执；§3 治理半边 2026-11-26 落地，扫描/lock/verify/show/仅索引；晋级仍待做）；§12.2 喂给 `questions.json` 协议（2026-11-18 已落地，见 §2.4）。
 
 ### 12.1 用户可见的子代理进度
 
@@ -1311,7 +1313,7 @@ agent 会重查几步前已经查到的事实——第 3 步答过的 `node --ve
 
 ### 12.3 skill：按声明分派，不按发现分派
 
-> **实现状态（2026-11-20，声明链路已落地）**：`TaskSpec.skills: [id]` 端到端实现——上下文编译器把每个 `<project>/.opencode/skills/<id>/SKILL.md` 正文注入 `skills` packet 段，紧跟 task 段之后（独立预算行：main/worker 4k、judgment 2k；skill **缺失或超预算时编译直接失败**，绝不发半个 skill）；reference 文件只列路径、不内联；context manifest 记录注入的 id（注入记录），`loom verify` 把它抄到 `receipt.skills`，opencode preset 则在 stdin 追加 `@skill-id` mention——最后一跳已实现但**未经验证**，要等 opencode canary 跑通（doc/14 阻塞项）。下列规则成立；仍待做的全在 §3 周边：skills 扫描/按需发现与验证后的晋级。
+> **实现状态（2026-11-20，声明链路已落地）**：`TaskSpec.skills: [id]` 端到端实现——上下文编译器把每个 `<project>/.opencode/skills/<id>/SKILL.md` 正文注入 `skills` packet 段，紧跟 task 段之后（独立预算行：main/worker 4k、judgment 2k；skill **缺失或超预算时编译直接失败**，绝不发半个 skill）；reference 文件只列路径、不内联；context manifest 记录注入的 id（注入记录），`loom verify` 把它抄到 `receipt.skills`，opencode preset 则在 stdin 追加 `@skill-id` mention——最后一跳已实现但**未经验证**，要等 opencode canary 跑通（doc/14 阻塞项）。下列规则成立；§3 的治理半边已于 2026-11-26 落地（扫描、catalog、recommend、lock、verify、`show`、仅索引 packet——见 §3 状态注记）；L2 评估后的晋级仍待做。
 
 Loom 已经有正确样本：`default_prompt_role` 在代码里按 `TaskSpec.role` 确定性地映射 prompt。子代理悄悄没拿到 skill（在 Codex CLI 上观察到）正是把指令分派交给模型发现时会发生的事。
 

@@ -15,8 +15,8 @@ use serde::Serialize;
 use std::os::unix::fs::PermissionsExt as _;
 
 use crate::catalog::{load_catalog, Catalog, CATALOG_REL, LICENSE_ALLOWLIST};
-use crate::frontmatter::parse_frontmatter;
 use crate::lock::{load_lock, sha256_hex, write_lock, LockEntry, SkillsLock, LOCK_REL};
+use loom_core::parse_frontmatter;
 
 pub const SKILLS_DIR_REL: &str = ".opencode/skills";
 const NOTICES_REL: &str = ".opencode/skill-pilot/THIRD_PARTY_NOTICES.md";

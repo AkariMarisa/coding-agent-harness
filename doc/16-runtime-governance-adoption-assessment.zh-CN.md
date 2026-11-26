@@ -924,6 +924,8 @@ write_guard = "create"       # create | off
 
 ## 9. F. Skills
 
+> 状态：**已实现（2026-11-26）**，随 doc/15 §3 P2 —— 下面三项落地（tracked `.opencode/skills.lock`、`scripts/check-skills.sh` 作为 `skills-check` job、触发预算由 `loom skill verify` 强制），另加 doc/15 的 `loom skill scan` / `recommend` / `show` 与仅索引 packet。按 §9.2 推迟：`loom skill add/remove/update` 安装流与 L2 评估（§9.4）。
+
 ### 9.1 当前试点事实
 
 五个项目级 skill 已存在并通过 OpenCode 自动发现：

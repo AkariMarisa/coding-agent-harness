@@ -930,6 +930,8 @@ otherwise it silently falls back to the official endpoint in `.env.local`.
 
 ## 9. F. Skills
 
+> Status: **implemented (2026-11-26)** as part of doc/15 §3 P2 — the three items below landed (tracked `.opencode/skills.lock`, `scripts/check-skills.sh` as the `skills-check` job, trigger budgets enforced by `loom skill verify`), plus the doc/15 additions `loom skill scan` / `recommend` / `show` and index-only packets. Deferred per §9.2: the `loom skill add/remove/update` install flow and the L2 evaluation (§9.4).
+
 ### 9.1 Current pilot facts
 
 Five project-level skills already exist and are auto-discovered by OpenCode:

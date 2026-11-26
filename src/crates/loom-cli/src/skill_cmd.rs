@@ -14,7 +14,50 @@ pub fn skill(project: &loom_store::Project, command: SkillCommand, format: Forma
         SkillCommand::Scan => scan_profile(project, format),
         SkillCommand::Recommend { task } => recommend(project, &task, format),
         SkillCommand::Verify { write_lock } => verify(project, write_lock, format),
+        SkillCommand::Show { id, json } => show(project, &id, json),
     }
+}
+
+/// `loom skill show <id>`: the other half of progressive disclosure
+/// (`doc/15` §3.6) — plain text by default (the consumer is a model reading
+/// a tool result), `--json` for structure. Bodies are capped at 4KB.
+fn show(project: &loom_store::Project, id: &str, json: bool) -> Result<i32> {
+    let skill =
+        loom_skill::read_skill(&project.root, id).map_err(|error| anyhow::anyhow!(error))?;
+    if json {
+        let value = serde_json::json!({
+            "v": 1,
+            "id": skill.id,
+            "path": skill.path,
+            "tokens": skill.tokens,
+            "truncated": skill.truncated,
+            "total_bytes": skill.total_bytes,
+            "body": skill.body,
+            "references": skill.references,
+        });
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(0);
+    }
+
+    print!("{}", skill.body);
+    if !skill.body.ends_with('\n') {
+        println!();
+    }
+    if skill.truncated {
+        println!(
+            "… [truncated: showing {} of {} bytes; full body at {}]",
+            skill.body.len(),
+            skill.total_bytes,
+            skill.path
+        );
+    }
+    if !skill.references.is_empty() {
+        println!(
+            "references (read on demand): {}",
+            skill.references.join(", ")
+        );
+    }
+    Ok(0)
 }
 
 /// `loom skill verify`: the L0 gate (`doc/15` §3.7, `doc/16` §9.3).
