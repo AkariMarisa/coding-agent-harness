@@ -499,16 +499,46 @@ pub(crate) fn run_verify(
                 }
             }
         }
-        ReceiptStatus::Blocked | ReceiptStatus::BudgetExceeded => append_event(
-            project,
-            &loom_core::Event::new(&run.id, now_ms(), EventType::TaskBlocked)
-                .task(task_id)
-                .attempt(attempt)
-                .data([
-                    ("code".to_string(), json!(status.as_str())),
-                    ("verify_ids".to_string(), verify_ids),
-                ]),
-        )?,
+        ReceiptStatus::Blocked | ReceiptStatus::BudgetExceeded => {
+            append_event(
+                project,
+                &loom_core::Event::new(&run.id, now_ms(), EventType::TaskBlocked)
+                    .task(task_id)
+                    .attempt(attempt)
+                    .data([
+                        ("code".to_string(), json!(status.as_str())),
+                        ("verify_ids".to_string(), verify_ids),
+                    ]),
+            )?;
+            // `doc/15` §2.2: same shape as a dispatch refusal — an
+            // environment claim is an `operation`, a budget decision an
+            // `approval`; `soon` because the wait is expected to clear.
+            let code = status.as_str();
+            let kind = if code == "budget_exceeded" {
+                loom_core::AttentionKind::Approval
+            } else {
+                loom_core::AttentionKind::Operation
+            };
+            open_item(
+                project,
+                &NewItem {
+                    run_id: run.id.clone(),
+                    task_id: Some(task_id.to_string()),
+                    kind,
+                    source: loom_core::AttentionSource::Task,
+                    severity: loom_core::Severity::Soon,
+                    dedupe_key: format!("task:{task_id}:blocked"),
+                    title: format!("task {task_id} blocked: {code}"),
+                    detail: Some(format!("verify claim: {code}")),
+                    refs: Vec::new(),
+                    actions: vec![loom_core::AttentionAction {
+                        id: "show".to_string(),
+                        label: "Show task".to_string(),
+                        cmd: format!("loom task show {task_id}"),
+                    }],
+                },
+            )?;
+        }
         ReceiptStatus::Failed => {
             let code = if claim_done {
                 "verify_fail"

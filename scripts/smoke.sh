@@ -297,8 +297,15 @@ EOF
 loom task add --file /work/.smoke/task-skills.json > /dev/null
 
 # Compile injects the body and records the ids in the manifest.
+# include_in_packet = "counts" puts one counts line in the packet — counts
+# only, never inbox item text (doc/15 §2.2).
+loom config set attention.include_in_packet counts > /dev/null
 loom context compile T-20261106-009 --out /work/.smoke/skills-ctx --format json \
-    | grep -q '"skills"' || {
+    | grep -q '"skills"'
+grep -q '# attention' /work/.smoke/skills-ctx/packet.md || {
+    echo "expected the attention counts line when include_in_packet=counts" >&2
+    exit 1
+} || {
     echo "expected manifest to record injected skills" >&2; exit 1;
 }
 # Progressive disclosure (doc/15 §3.6): the packet carries the index line

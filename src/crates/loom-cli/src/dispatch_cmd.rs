@@ -154,6 +154,7 @@ fn prepare_attempt(
         kind,
         budget: None,
         prompt,
+        attention_counts: super::run_util::attention_counts(project),
     };
     let compiled = compile(&request_context)?;
     compiled.write(&run.context_dir())?;
@@ -366,8 +367,43 @@ pub(crate) fn dispatch(
                     ("reason".to_string(), json!(route.reason.as_str())),
                 ]),
             )?;
+            // `doc/15` §2.2: consecutive failures escalated → a review item
+            // (escalate further, change the AC, or split the task). No
+            // auto-resolve: a human decides how to answer the escalation.
+            loom_store::open_item(
+                project,
+                &loom_store::NewItem {
+                    run_id: attempt.run.id.clone(),
+                    task_id: Some(attempt.spec.task_id.clone()),
+                    kind: loom_core::AttentionKind::Review,
+                    source: loom_core::AttentionSource::Task,
+                    severity: loom_core::Severity::Soon,
+                    dedupe_key: format!("task:{}:escalated", attempt.spec.task_id),
+                    title: format!(
+                        "task {} escalated to {}",
+                        attempt.spec.task_id,
+                        route.tier.as_str()
+                    ),
+                    detail: Some(format!("reason: {}", route.reason.as_str())),
+                    refs: Vec::new(),
+                    actions: vec![loom_core::AttentionAction {
+                        id: "show".to_string(),
+                        label: "Show task".to_string(),
+                        cmd: format!("loom task show {}", attempt.spec.task_id),
+                    }],
+                },
+            )?;
         }
 
+        // A dispatch that got past the guards clears any blocked item for
+        // this task (`doc/15` §2.2 — condition cleared).
+        loom_store::resolve_by_key(
+            project,
+            &attempt.run.id,
+            &format!("task:{}:blocked", attempt.spec.task_id),
+            "loom",
+            "condition cleared",
+        )?;
         loom_store::append_event(
             project,
             &loom_core::Event::new(

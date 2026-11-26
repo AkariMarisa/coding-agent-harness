@@ -233,6 +233,15 @@ pub fn merge(project: &Project, task_id: &str, attempt: u32, format: Format) -> 
             ]),
     )?;
     sync_index(project)?;
+    // `doc/15` §2.2: the merge gate cleared — a blocked item for this task
+    // resolves with it.
+    loom_store::resolve_by_key(
+        project,
+        &run_id,
+        &format!("task:{task_id}:blocked"),
+        "loom",
+        "condition cleared",
+    )?;
 
     // Best-effort cleanup: a dirty worktree stays put and is reported.
     let worktree_str = worktree.to_string_lossy().into_owned();

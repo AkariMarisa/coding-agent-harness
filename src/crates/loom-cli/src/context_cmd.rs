@@ -62,6 +62,7 @@ pub fn context(
                 kind,
                 budget: Some(budget),
                 prompt,
+                attention_counts: super::run_util::attention_counts(project),
             };
             let compiled = compile(&request)?;
 

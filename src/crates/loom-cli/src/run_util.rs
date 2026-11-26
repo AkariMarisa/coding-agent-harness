@@ -122,6 +122,22 @@ pub fn append_blocked_event(
     attempt: u32,
     data: Vec<(&str, serde_json::Value)>,
 ) -> Result<()> {
+    // Extract before the builder consumes `data`: the linkage item carries
+    // the same reason the event does.
+    let code = data
+        .iter()
+        .find(|(key, _)| *key == "code")
+        .and_then(|(_, value)| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let detail = serde_json::to_string(
+        &data
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect::<serde_json::Map<String, serde_json::Value>>(),
+    )
+    .unwrap_or_default();
+
     let event = loom_core::Event::new(run_id, now_ms(), loom_core::EventType::TaskBlocked)
         .task(task_id)
         .attempt(attempt)
@@ -130,7 +146,48 @@ pub fn append_blocked_event(
                 .map(|(key, value)| (key.to_string(), value))
                 .collect::<Vec<_>>(),
         );
-    loom_store::append_event(project, &event)
+    loom_store::append_event(project, &event)?;
+
+    // `doc/15` §2.2 linkage: a blocked task is a resident item — an
+    // `operation` for environment waits (lock, claim), an `approval` for
+    // policy caps (parallel, budget). Severity `soon`: these waits are
+    // expected to clear, and the dedupe key folds a re-block instead of
+    // flooding the list.
+    let kind = if matches!(code.as_str(), "lock_owner" | "blocked") {
+        loom_core::AttentionKind::Operation
+    } else {
+        loom_core::AttentionKind::Approval
+    };
+    loom_store::open_item(
+        project,
+        &loom_store::NewItem {
+            run_id: run_id.to_string(),
+            task_id: Some(task_id.to_string()),
+            kind,
+            source: loom_core::AttentionSource::Task,
+            severity: loom_core::Severity::Soon,
+            dedupe_key: format!("task:{task_id}:blocked"),
+            title: format!("task {task_id} blocked: {code}"),
+            detail: Some(detail),
+            refs: Vec::new(),
+            actions: vec![loom_core::AttentionAction {
+                id: "show".to_string(),
+                label: "Show task".to_string(),
+                cmd: format!("loom task show {task_id}"),
+            }],
+        },
+    )?;
+    Ok(())
+}
+
+/// `[attention] include_in_packet = "counts"` wiring for the context
+/// compiler: counts only when enabled, `None` (inbox stays out of model
+/// context) otherwise. Config problems degrade to `None`, never to a
+/// failed compile.
+pub fn attention_counts(project: &Project) -> Option<loom_core::InboxCounts> {
+    let config = project.load_config().ok()?;
+    (config.attention.include_in_packet == "counts")
+        .then(|| loom_store::read_inbox_lenient(project).counts)
 }
 
 pub fn git_head(path: &std::path::Path) -> Option<String> {

@@ -8,7 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context as _, Result};
-use loom_core::{estimate_tokens, parse_frontmatter, truncate_chars, TaskSpec, TaskStatus};
+use loom_core::{
+    estimate_tokens, parse_frontmatter, truncate_chars, InboxCounts, TaskSpec, TaskStatus,
+};
 use loom_store::{sha256_hex, Project};
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +139,10 @@ pub struct CompileRequest<'a> {
     pub kind: ContextKind,
     pub budget: Option<ContextBudget>,
     pub prompt: &'a PromptTemplate,
+    /// Inbox counts when `[attention] include_in_packet = "counts"` — counts
+    /// only, never item text (`doc/15` §2.2). `None` (the default) keeps the
+    /// inbox out of model context entirely.
+    pub attention_counts: Option<InboxCounts>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -357,6 +363,22 @@ pub fn compile(request: &CompileRequest<'_>) -> Result<CompiledContext> {
             file: "skills.md".to_string(),
             text: skills_text,
             cap: budget.skills,
+            essential: true,
+            truncated: false,
+        });
+    }
+    // Opt-in human-awareness line (`doc/15` §2.2): counts only — this
+    // channel tells the model someone is waiting, never what they said.
+    if let Some(counts) = &request.attention_counts {
+        drafts.push(Draft {
+            name: "attention",
+            source: ".loom/inbox.json",
+            file: "attention.md".to_string(),
+            text: format!(
+                "# attention\n{} blocking · {} pending · {} info\n",
+                counts.blocking, counts.soon, counts.info
+            ),
+            cap: 64,
             essential: true,
             truncated: false,
         });
@@ -1070,6 +1092,7 @@ mod tests {
             kind: ContextKind::Worker,
             budget: None,
             prompt: prompt::get(PromptRole::Worker).expect("prompt"),
+            attention_counts: None,
         }
     }
 
@@ -1288,6 +1311,41 @@ mod tests {
         let compiled = compile(&req).expect("compile");
         assert!(compiled.manifest.skills.is_empty());
         assert!(!compiled.packet.contains("# skills"));
+    }
+
+    #[test]
+    fn attention_counts_enter_the_packet_only_when_requested() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project::at(dir.path());
+        fs::create_dir_all(project.loom_dir()).expect("mkdir");
+        let source = project.root.join("src");
+        fs::create_dir_all(&source).expect("mkdir");
+        fs::write(source.join("lib.rs"), "fn a() {}\n").expect("write");
+        let spec = task();
+
+        // Default: the inbox stays out of model context entirely.
+        let req = request(&project, &spec);
+        let compiled = compile(&req).expect("compile");
+        assert!(!compiled.packet.contains("# attention"));
+
+        // include_in_packet = "counts": one line of counts, no item text.
+        let mut req = request(&project, &spec);
+        req.attention_counts = Some(InboxCounts {
+            blocking: 2,
+            soon: 1,
+            info: 0,
+        });
+        let compiled = compile(&req).expect("compile");
+        assert!(compiled.packet.contains("# attention"));
+        assert!(compiled.packet.contains("2 blocking · 1 pending · 0 info"));
+        assert!(
+            compiled
+                .manifest
+                .sections
+                .iter()
+                .any(|section| section.name == "attention"),
+            "counts section recorded in the manifest"
+        );
     }
 
     #[test]

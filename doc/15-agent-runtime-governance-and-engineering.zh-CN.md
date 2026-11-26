@@ -260,7 +260,7 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 ### 2.2 人工事项收件箱（attention inbox）
 
-> 状态：**已实现（2026-11-21）** —— `attention.*` 事件 + reducer（`loom-core/src/attention.rs`）、`.loom/inbox.json` 视图（`loom-store/src/inbox.rs`）、`loom inbox`（列表 / `--line` / `--check` / `--kind` / `--task` / `--all` / `--json` + `ack`/`defer`/`resolve`）、TTY stderr 页脚（`LOOM_NO_INBOX=1`、`[attention] footer`）、`[attention]` 配置节、`task.needs_input` → `loom answer` 链路，以及 doctor 联动（检查失败开 `doctor:<check>` 操作事项，检查通过自动 resolve）。尚未做：下方联动表中的 CI/升级/路由护栏来源、`include_in_packet = "counts"`、父子浮升规则、TUI 角落。
+> 状态：**已实现（2026-11-21）** —— `attention.*` 事件 + reducer（`loom-core/src/attention.rs`）、`.loom/inbox.json` 视图（`loom-store/src/inbox.rs`）、`loom inbox`（列表 / `--line` / `--check` / `--kind` / `--task` / `--all` / `--json` + `ack`/`defer`/`resolve`）、TTY stderr 页脚（`LOOM_NO_INBOX=1`、`[attention] footer`）、`[attention]` 配置节、`task.needs_input` → `loom answer` 链路，以及 doctor 联动（检查失败开 `doctor:<check>` 操作事项，检查通过自动 resolve）。联动已落地：`task.blocked`（环境等待开 operation、策略上限开 approval，severity `soon`，dispatch/merge 成功即 resolve）、升级（review，人工关闭）、CI（review + operation）与 doctor（operation）；`include_in_packet = "counts"` 会向 packet 注入一行计数。尚未做：联动表中的技能晋升行（等 L2）、红基线行（随 `[ci] preflight` 落地）、父子浮升规则、TUI 角落。
 
 目标：任何时候都能用一条命令回答“现在有什么需要我处理”，并且在 harness 的一个固定角落持续显示，而不是靠用户回翻对话。事项**不只包括问题**，还包括审批、操作、复核和提醒。
 
