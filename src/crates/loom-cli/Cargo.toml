@@ -16,6 +16,7 @@ loom-ci = { path = "../loom-ci" }
 loom-context = { path = "../loom-context" }
 loom-core = { path = "../loom-core" }
 loom-native = { path = "../loom-native" }
+loom-skill = { path = "../loom-skill" }
 loom-store = { path = "../loom-store" }
 loom-tools = { path = "../loom-tools" }
 serde.workspace = true

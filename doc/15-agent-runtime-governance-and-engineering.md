@@ -1225,7 +1225,7 @@ Notes:
 - [ ] After the 2nd rewrite the old payload is projected; the 3rd `write` without `mode=replace` is rejected with a short error; after L3 triggers, the restart carries only a churn summary.
 - [ ] The same change made with a patch vs. a whole-file `write` shows a quantifiable gap in output tokens.
 - [ ] `loom churn stats --by model` prints token/cost on the first screen and only `write_passes` / `churn_ratio` on the second (validated with scripted data first).
-- [ ] Every tag output by `loom skill scan` has an evidence file; no evidence, no tag.
+- [x] Every tag output by `loom skill scan` has an evidence file; no evidence, no tag (2026-11-26; invariant enforced inside `detect()`, fixture-tested, smoke-verified on the Rust fixture).
 - [ ] `loom skill add` writes only the project-level directory and `skills.lock`; a skill that fails static checks is refused.
 - [ ] When a skill is loaded, only the index line is injected; the body is read on demand via `loom skill show`, under the 4KB/8KB budget.
 - [ ] Every new event is synced to the `loom-core` types, `schemas/event.v1.json`, `doc/03` §11.2, and at least one test.

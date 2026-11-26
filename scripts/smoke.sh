@@ -546,6 +546,18 @@ mkdir -p /work/.smoke/scripts
 printf '[package]\nname = "fixture"\nversion = "0.1.0"\n' > /work/.smoke/Cargo.toml
 printf '#!/bin/sh\nexec "$@"\n' > /work/.smoke/scripts/dev.sh
 chmod +x /work/.smoke/scripts/dev.sh
+# skill scan turns the same fixtures into the stack profile (doc/15 §3.2);
+# the second run must hit the git_head + mtime cache.
+loom skill scan > /dev/null
+grep -q '"rust"' /work/.smoke/.loom/stack-profile.json || {
+    echo "expected skill scan to detect the Rust fixture" >&2
+    exit 1
+}
+grep -q '"container"' /work/.smoke/.loom/stack-profile.json
+loom skill scan --format pretty | grep -q '(cached)' || {
+    echo "expected an unchanged tree to hit the scan cache" >&2
+    exit 1
+}
 loom ci plan --json | grep -q '"sufficient": true' || {
     echo "expected plan to detect the Rust fixture" >&2
     exit 1

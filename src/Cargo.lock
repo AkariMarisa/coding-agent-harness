@@ -549,6 +549,7 @@ dependencies = [
  "loom-context",
  "loom-core",
  "loom-native",
+ "loom-skill",
  "loom-store",
  "loom-tools",
  "serde",
@@ -594,6 +595,17 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "loom-skill"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

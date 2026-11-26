@@ -36,6 +36,7 @@ mod prompt_cmd;
 mod resume_cmd;
 mod route_cmd;
 mod run_util;
+mod skill_cmd;
 mod task_cmd;
 mod top_cmd;
 mod usage_cmd;
@@ -217,6 +218,11 @@ enum Command {
     Prompt {
         #[command(subcommand)]
         command: PromptCommand,
+    },
+    /// Skills governance: repo profile, catalog, lock, static checks (doc/15 §3).
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
     },
     /// Inspect executor adapters and run contract canaries.
     Adapter {
@@ -536,6 +542,12 @@ enum PromptCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum SkillCommand {
+    /// Scan the repo into .loom/stack-profile.json (zero-LLM, read-only).
+    Scan,
+}
+
+#[derive(Debug, Subcommand)]
 enum AdapterCommand {
     /// List adapter presets and their availability.
     List,
@@ -697,6 +709,9 @@ fn run(cli: Cli) -> Result<i32> {
             for message in &bootstrap.messages {
                 println!("  ci: {message}");
             }
+            // `doc/15` §4.4 item 1: scan the repo into the runtime profile.
+            let profile = skill_cmd::refresh_profile_line(&project)?;
+            println!("  skill: {profile}");
             if project
                 .load_config()
                 .map(|config| config.models.is_empty())
@@ -805,6 +820,7 @@ fn run(cli: Cli) -> Result<i32> {
             context_cmd::context(&project, command, cli.run.as_deref(), cli.format)
         }
         Command::Prompt { command } => prompt_cmd::prompt(&project, command, cli.format),
+        Command::Skill { command } => skill_cmd::skill(&project, command, cli.format),
         Command::Adapter { command } => {
             adapter_cmd::adapter(&project, command, cli.run.as_deref(), cli.format)
         }

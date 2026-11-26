@@ -1224,7 +1224,7 @@ loom verify（TaskSpec acceptance，仍是任务权威）
 - [ ] 第 2 次重写后旧 payload 被投影；第 3 次无 `mode=replace` 的 `write` 被短错误拒绝；L3 触发后重启只带 churn 摘要。
 - [ ] 同一改动用 patch 与用整文件 `write` 的 output token 有可量化差距。
 - [ ] `loom churn stats --by model` 第一屏输出 token / 成本，第二屏才是 `write_passes` / `churn_ratio`（先用脚本化数据验证）。
-- [ ] `loom skill scan` 输出的每个标签都有证据文件；无证据不出现。
+- [x] `loom skill scan` 输出的每个标签都有证据文件；无证据不出现。（2026-11-26；`detect()` 内强制该不变量，夹具单测 + Rust 夹具 smoke 验证。）
 - [ ] `loom skill add` 只写项目级目录与 `skills.lock`；未通过静态检查的 skill 拒绝安装。
 - [ ] 加载 skill 时只注入索引行；正文经 `loom skill show` 按需读取，受 4KB/8KB 预算。
 - [ ] 所有新增事件同步了 `loom-core` 类型、`schemas/event.v1.json`、`doc/03` §11.2 与至少一个测试。
