@@ -602,6 +602,8 @@ name = "loom-skill"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ignore",
+ "loom-core",
  "serde",
  "serde_json",
  "sha2",

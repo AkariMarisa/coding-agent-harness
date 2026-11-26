@@ -12,7 +12,74 @@ use super::{Format, SkillCommand};
 pub fn skill(project: &loom_store::Project, command: SkillCommand, format: Format) -> Result<i32> {
     match command {
         SkillCommand::Scan => scan_profile(project, format),
+        SkillCommand::Recommend { task } => recommend(project, &task, format),
     }
+}
+
+/// `loom skill recommend --task T-…`: score the catalog against the repo
+/// profile and one task; the output is advice for the human slicer, never
+/// an auto-declaration (`doc/15` §3.4, §12.3 rule 1).
+fn recommend(project: &loom_store::Project, task_id: &str, format: Format) -> Result<i32> {
+    let spec = loom_store::read_task(project, task_id)?;
+    // Refresh the profile first (cached unless the tree moved).
+    let profile = scan(&project.root)?.profile;
+    let catalog = loom_skill::load_catalog(&project.root)
+        .map_err(|error| anyhow::anyhow!(error))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no {} — create it to enable recommendations",
+                loom_skill::CATALOG_REL
+            )
+        })?;
+    let suggestions = loom_skill::recommend(&loom_skill::RecommendInput {
+        root: &project.root,
+        profile: &profile,
+        catalog: &catalog,
+        role: spec.role.as_str(),
+        loaded: &spec.skills,
+    });
+
+    match format {
+        Format::Json => {
+            let value = serde_json::json!({
+                "v": 1,
+                "task_id": spec.task_id,
+                "role": spec.role.as_str(),
+                "threshold": loom_skill::AUTO_THRESHOLD,
+                "max_suggestions": loom_skill::MAX_SUGGESTIONS,
+                "max_auto": loom_skill::MAX_AUTO,
+                "suggestions": suggestions,
+            });
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
+        Format::Pretty => {
+            println!(
+                "recommendations for {} (role={}, threshold {}, auto ≤ {}):",
+                spec.task_id,
+                spec.role.as_str(),
+                loom_skill::AUTO_THRESHOLD,
+                loom_skill::MAX_AUTO
+            );
+            if suggestions.is_empty() {
+                println!("  (nothing above the floor)");
+            }
+            for suggestion in &suggestions {
+                let label = if suggestion.auto {
+                    "auto   "
+                } else {
+                    "suggest"
+                };
+                println!(
+                    "  {label} {:<24} score {:>5}  {} tok",
+                    suggestion.id, suggestion.score, suggestion.tokens
+                );
+                for why in &suggestion.why {
+                    println!("           - {why}");
+                }
+            }
+        }
+    }
+    Ok(0)
 }
 
 /// `loom skill scan`: deterministic repo profile into `.loom/stack-profile.json`.

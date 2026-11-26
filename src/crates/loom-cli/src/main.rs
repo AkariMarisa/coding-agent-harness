@@ -545,6 +545,12 @@ enum PromptCommand {
 enum SkillCommand {
     /// Scan the repo into .loom/stack-profile.json (zero-LLM, read-only).
     Scan,
+    /// Score the catalog against the profile and one task (advice only).
+    Recommend {
+        /// Task whose role and declared skills shape the scoring.
+        #[arg(long)]
+        task: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

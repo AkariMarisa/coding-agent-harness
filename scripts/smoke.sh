@@ -558,6 +558,23 @@ loom skill scan --format pretty | grep -q '(cached)' || {
     echo "expected an unchanged tree to hit the scan cache" >&2
     exit 1
 }
+# catalog + recommend turn the profile into TaskSpec.skills advice
+# (doc/15 §3.3/§3.4); tracked in real repos, fixture here.
+cat > /work/.smoke/.opencode/skills.catalog.json <<'CATALOG_EOF'
+{"v":1,"skills":[{"id":"smoke-skill","source":"internal","license":"MIT","tags":["rust"],"triggers":{"lang":["rust"],"globs":["**/*.md"],"roles":["implement"]},"status":"project"}]}
+CATALOG_EOF
+loom skill recommend --task T-20261106-009 --format json > /work/.smoke/.loom/recommend.json || {
+    echo "loom skill recommend failed" >&2
+    exit 1
+}
+grep -q '"id": "smoke-skill"' /work/.smoke/.loom/recommend.json || {
+    echo "expected smoke-skill to be suggested for the Rust fixture" >&2
+    exit 1
+}
+grep -q '"auto": true' /work/.smoke/.loom/recommend.json || {
+    echo "expected the matching declared skill to be auto-eligible" >&2
+    exit 1
+}
 loom ci plan --json | grep -q '"sufficient": true' || {
     echo "expected plan to detect the Rust fixture" >&2
     exit 1

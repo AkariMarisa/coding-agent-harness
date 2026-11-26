@@ -1,0 +1,49 @@
+{
+  "v": 1,
+  "skills": [
+    {
+      "id": "docs-writing",
+      "source": "third-party",
+      "license": "MIT",
+      "tags": ["docs"],
+      "triggers": { "lang": [], "globs": ["**/*.md"], "roles": ["docs", "implement"] },
+      "status": "project"
+    },
+    {
+      "id": "code-quality-review",
+      "source": "third-party",
+      "license": "MIT",
+      "tags": ["review", "rust"],
+      "triggers": { "lang": ["rust"], "globs": ["**/*.rs"], "roles": ["review", "judgment"] },
+      "status": "project"
+    },
+    {
+      "id": "architecture-design",
+      "source": "third-party",
+      "license": "MIT",
+      "tags": ["architecture", "rust"],
+      "triggers": { "lang": ["rust"], "globs": ["**/*.rs"], "roles": ["review", "judgment"] },
+      "status": "project"
+    },
+    {
+      "id": "refactor-code",
+      "source": "third-party",
+      "license": "MIT",
+      "tags": ["refactor", "rust"],
+      "triggers": { "lang": ["rust"], "globs": ["**/*.rs"], "roles": ["implement"] },
+      "status": "project"
+    },
+    {
+      "id": "format-code",
+      "source": "internal",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "tags": ["format", "rust"],
+      "triggers": {
+        "lang": ["rust"],
+        "globs": ["**/*.rs", "**/*.toml", "**/*.md"],
+        "roles": ["implement", "docs"]
+      },
+      "status": "project"
+    }
+  ]
+}
