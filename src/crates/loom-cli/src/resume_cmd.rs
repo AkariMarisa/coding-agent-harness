@@ -34,6 +34,8 @@ pub fn resume(
                 timeout_s: None,
                 attempt: 1,
                 in_place: false,
+                // Resume honors the same baseline gate as dispatch.
+                allow_red_baseline: false,
             };
             match dispatch_cmd::dispatch(project, &args, None, Format::Json) {
                 Ok(exit) => dispatched.push((task.task_id.clone(), exit)),

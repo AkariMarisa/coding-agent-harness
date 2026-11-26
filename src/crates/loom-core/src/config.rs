@@ -102,6 +102,10 @@ pub struct CiConfig {
     /// When a hook cannot find `loom`, let the commit through with a warning
     /// (a fresh clone must still work). Controls the generated script.
     pub hooks_fail_open: bool,
+    /// Baseline preflight (`doc/15` §4.8): `off` (default) or the profile
+    /// `loom dispatch` runs before dispatching — a red baseline refuses
+    /// unless `--allow-red-baseline` says otherwise.
+    pub preflight: String,
 }
 
 impl Default for CiConfig {
@@ -110,6 +114,7 @@ impl Default for CiConfig {
             default_profile: "fast".to_string(),
             hooks_fix_safe: false,
             hooks_fail_open: true,
+            preflight: "off".to_string(),
         }
     }
 }
@@ -200,6 +205,14 @@ impl Config {
             return Err(ConfigError::Validation(
                 "ci.default_profile must not be empty".to_string(),
             ));
+        }
+        match self.ci.preflight.as_str() {
+            "off" | "fast" => {}
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "ci.preflight must be off|fast, got {other}"
+                )));
+            }
         }
         Ok(())
     }
@@ -708,6 +721,17 @@ base_url = "https://b.example"
             Config::load(&path),
             Err(ConfigError::Validation(_))
         ));
+
+        // [ci] preflight accepts only off|fast and defaults to off.
+        let config = Config::default();
+        assert_eq!(config.ci.preflight, "off");
+        fs::write(&path, "[ci]\npreflight = \"always\"\n").expect("write");
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Validation(_))
+        ));
+        fs::write(&path, "[ci]\npreflight = \"fast\"\n").expect("write");
+        assert_eq!(Config::load(&path).expect("load").ci.preflight, "fast");
     }
 
     #[test]

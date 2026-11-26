@@ -892,4 +892,40 @@ test ! -f /work/.smoke/.git/hooks/pre-commit || {
     exit 1
 }
 
+# baseline preflight ([ci] preflight, doc/15 §4.8): a red fast profile
+# refuses dispatch with an actionable hint and its failure is linked to the
+# inbox; --allow-red-baseline proceeds past the gate.
+loom config set ci.preflight fast > /dev/null
+code=0
+preflight_out=$(loom dispatch T-20261106-004 --adapter mock --in-place 2>&1) || code=$?
+test "$code" = "4" || {
+    echo "expected preflight refusal (exit 4), got $code" >&2
+    exit 1
+}
+echo "$preflight_out" | grep -q 'fix the baseline first' || {
+    echo "expected the actionable baseline hint" >&2
+    exit 1
+}
+loom inbox --kind review --format json | grep -q 'ci:always-fail:' || {
+    echo "expected the red preflight job to be a review item" >&2
+    exit 1
+}
+code=0
+allow_out=$(loom dispatch T-20261106-004 --adapter mock --in-place --allow-red-baseline 2>&1) || code=$?
+if echo "$allow_out" | grep -q 'fix the baseline first'; then
+    echo "--allow-red-baseline must pass the gate" >&2
+    exit 1
+fi
+# stats aggregate every report the rings above produced (doc/15 §4.12),
+# including the hook runs from the hooks ring.
+loom ci stats --format json > /work/.smoke/.loom/ci-stats.json
+grep -q '"hook_runs"' /work/.smoke/.loom/ci-stats.json || {
+    echo "expected stats output" >&2
+    exit 1
+}
+grep -Eq '"runs": [1-9]' /work/.smoke/.loom/ci-stats.json || {
+    echo "expected stats to count the runs above" >&2
+    exit 1
+}
+
 echo "SMOKE_OK"

@@ -33,7 +33,64 @@ pub fn ci(project: &loom_store::Project, command: CiCommand, format: Format) -> 
         CiCommand::VerifyAttest { path, json } => verify_attest(project, &path, json, format),
         CiCommand::InstallHooks { profiles, force } => install_hooks(project, &profiles, force),
         CiCommand::RemoveHooks => remove_hooks(project),
+        CiCommand::Stats => stats(project, format),
     }
+}
+
+/// `loom ci stats`: aggregate every report under `.loom/ci/` — runs, pass
+/// rate, p50/p95 per profile, fix/hook/missing-tool counters
+/// (`doc/15` §4.12, the v1 subset the reports can actually prove).
+fn stats(project: &loom_store::Project, format: Format) -> Result<i32> {
+    let ci_dir = project.loom_dir().join("ci");
+    let mut reports = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&ci_dir) {
+        let mut dirs: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        dirs.sort();
+        for dir in dirs {
+            let Ok(text) = std::fs::read_to_string(dir.join("report.json")) else {
+                continue;
+            };
+            if let Ok(report) = serde_json::from_str::<loom_ci::RunReport>(&text) {
+                reports.push(report);
+            }
+        }
+    }
+
+    let summary = loom_ci::summarize(&reports);
+    match format {
+        Format::Json => {
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        Format::Pretty => {
+            if summary.runs == 0 {
+                println!("loom ci stats: no CI runs yet");
+                return Ok(0);
+            }
+            println!(
+                "loom ci stats: {} run(s), {} passed",
+                summary.runs, summary.passed
+            );
+            for profile in &summary.profiles {
+                println!(
+                    "  {:<12} {:>3} runs  {:>3} passed  p50 {:>7}ms  p95 {:>7}ms",
+                    profile.profile, profile.runs, profile.passed, profile.p50_ms, profile.p95_ms
+                );
+            }
+            println!(
+                "  jobs: {} total, {} failed · fix runs: {} · missing tool: {} · hook runs: {}",
+                summary.jobs,
+                summary.job_failures,
+                summary.fix_runs,
+                summary.missing_tool_runs,
+                summary.hook_runs
+            );
+        }
+    }
+    Ok(0)
 }
 
 fn run_profile(
@@ -92,6 +149,7 @@ fn run_profile(
         keep_going,
         fix,
         pre_fix: from_hook && config.ci.hooks_fix_safe && !fix,
+        from_hook,
         now_ms: loom_store::now_ms(),
     })?;
 
@@ -165,7 +223,10 @@ fn remove_hooks(project: &loom_store::Project) -> Result<i32> {
 /// `doc/16` §7.9: a failed job opens a `review` item keyed
 /// `ci:<job>:<tree>`; a green job on the same tree resolves it; a missing
 /// tool opens a blocking `operation`.
-fn link_attention(project: &loom_store::Project, outcome: &loom_ci::RunOutcome) -> Result<()> {
+pub(crate) fn link_attention(
+    project: &loom_store::Project,
+    outcome: &loom_ci::RunOutcome,
+) -> Result<()> {
     let tree = loom_ci::tree_id(&outcome.report.tree);
     for execution in &outcome.executions {
         let dedupe_key = format!("ci:{}:{tree}", execution.report.id);

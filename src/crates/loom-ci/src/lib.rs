@@ -23,7 +23,7 @@ pub use hooks::{
     MANAGED_MARKER,
 };
 pub use report::{
-    sha256_hex, tree_fingerprint, tree_id, verify_attestation, Attestation, JobReport, RunReport,
-    TreeFingerprint, VerifyOutcome,
+    sha256_hex, summarize, tree_fingerprint, tree_id, verify_attestation, Attestation, CiStats,
+    JobReport, ProfileStats, RunReport, TreeFingerprint, VerifyOutcome,
 };
 pub use run::{run, RunOutcome, RunRequest, EXIT_FAILED, EXIT_NEEDS_HUMAN, EXIT_OK, EXIT_TIMEOUT};

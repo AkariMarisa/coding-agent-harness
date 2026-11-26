@@ -247,6 +247,9 @@ enum Command {
         /// Force in-place execution instead of a git worktree.
         #[arg(long)]
         in_place: bool,
+        /// Dispatch even when the [ci] preflight profile is red.
+        #[arg(long)]
+        allow_red_baseline: bool,
     },
     /// Re-run acceptance commands independently and write the receipt.
     Verify {
@@ -474,6 +477,8 @@ enum CiCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Aggregate every run report: runs, pass rate, p50/p95, fix/hook counters.
+    Stats,
     /// Install git hooks that only call `loom ci run --from-hook`.
     InstallHooks {
         /// Comma-separated hook names; each runs the profile of the same name.
@@ -851,6 +856,7 @@ fn run(cli: Cli) -> Result<i32> {
             timeout_s,
             attempt,
             in_place,
+            allow_red_baseline,
         } => dispatch_cmd::dispatch(
             &project,
             &dispatch_cmd::DispatchArgs {
@@ -860,6 +866,7 @@ fn run(cli: Cli) -> Result<i32> {
                 timeout_s,
                 attempt,
                 in_place,
+                allow_red_baseline,
             },
             cli.run.as_deref(),
             cli.format,

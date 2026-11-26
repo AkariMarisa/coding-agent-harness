@@ -59,6 +59,10 @@ pub struct RunReport {
     /// `hooks_fix_safe` pre-fixes moved the tree under the run (exit 1).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tree_changed_by_fix: bool,
+    /// This run was started by a generated git hook (`doc/15` §4.6 wants
+    /// "whether hooks actually ran" recorded in the report).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_hook: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +194,119 @@ pub fn verify_attestation(root: &Path, path: &Path) -> Result<VerifyOutcome, Str
     })
 }
 
+/// Per-profile rollup for `loom ci stats` (`doc/15` §4.12 v1 subset:
+/// runs, pass rate, p50/p95 wall clock, fix/hook/missing-tool counters).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileStats {
+    pub profile: String,
+    pub runs: usize,
+    pub passed: usize,
+    pub p50_ms: u64,
+    pub p95_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiStats {
+    pub runs: usize,
+    pub passed: usize,
+    pub profiles: Vec<ProfileStats>,
+    pub jobs: usize,
+    pub job_failures: usize,
+    /// Runs that applied a safe fix (a `.fix` leg or a `fixed` job).
+    pub fix_runs: usize,
+    pub missing_tool_runs: usize,
+    /// Runs a generated git hook started.
+    pub hook_runs: usize,
+    pub first_run_ms: Option<u64>,
+    pub last_run_ms: Option<u64>,
+}
+
+/// Nearest-rank percentile over a sorted slice (`ceil(p*n) - 1`).
+fn percentile(sorted: &[u64], p: f64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let n = sorted.len();
+    let idx = ((p * n as f64).ceil() as usize)
+        .saturating_sub(1)
+        .min(n - 1);
+    sorted[idx]
+}
+
+pub fn summarize(reports: &[RunReport]) -> CiStats {
+    let mut by_profile: std::collections::BTreeMap<String, Vec<u64>> =
+        std::collections::BTreeMap::new();
+    let mut passed_by_profile: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut jobs = 0;
+    let mut job_failures = 0;
+    let mut fix_runs = 0;
+    let mut missing_tool_runs = 0;
+    let mut hook_runs = 0;
+    let mut first_run_ms: Option<u64> = None;
+    let mut last_run_ms: Option<u64> = None;
+
+    for report in reports {
+        by_profile
+            .entry(report.profile.clone())
+            .or_default()
+            .push(report.duration_ms);
+        if report.ok {
+            *passed_by_profile.entry(report.profile.clone()).or_default() += 1;
+        }
+        for job in &report.jobs {
+            jobs += 1;
+            if job.timed_out || job.exit != Some(0) {
+                job_failures += 1;
+            }
+        }
+        if report
+            .jobs
+            .iter()
+            .any(|job| job.fixed || job.id.ends_with(".fix"))
+        {
+            fix_runs += 1;
+        }
+        if report.missing_tool.is_some() {
+            missing_tool_runs += 1;
+        }
+        if report.from_hook {
+            hook_runs += 1;
+        }
+        let started = report.started_at_ms;
+        first_run_ms = Some(first_run_ms.map_or(started, |first: u64| first.min(started)));
+        last_run_ms = Some(last_run_ms.map_or(started, |last: u64| last.max(started)));
+    }
+
+    let profiles = by_profile
+        .into_iter()
+        .map(|(profile, mut durations)| {
+            durations.sort_unstable();
+            let passed = passed_by_profile.get(&profile).copied().unwrap_or(0);
+            ProfileStats {
+                runs: durations.len(),
+                p50_ms: percentile(&durations, 0.50),
+                p95_ms: percentile(&durations, 0.95),
+                profile,
+                passed,
+            }
+        })
+        .collect();
+
+    CiStats {
+        runs: reports.len(),
+        passed: reports.iter().filter(|report| report.ok).count(),
+        profiles,
+        jobs,
+        job_failures,
+        fix_runs,
+        missing_tool_runs,
+        hook_runs,
+        first_run_ms,
+        last_run_ms,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +402,7 @@ mod tests {
             advisory: false,
             missing_tool: None,
             tree_changed_by_fix: false,
+            from_hook: false,
         };
         let text = serde_json::to_string_pretty(&report).expect("serialize");
         let back: RunReport = serde_json::from_str(&text).expect("parse");
@@ -345,6 +463,7 @@ mod tests {
             advisory: false,
             missing_tool: None,
             tree_changed_by_fix: false,
+            from_hook: false,
         };
         let report_path = run_dir.join("report.json");
         let text = serde_json::to_string_pretty(&report).expect("serialize");
@@ -404,5 +523,78 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("digest")));
+    }
+
+    fn report(profile: &str, ok: bool, duration_ms: u64) -> RunReport {
+        RunReport {
+            v: 1,
+            run_id: format!("CI-{profile}-{duration_ms}"),
+            profile: profile.to_string(),
+            ci_toml_sha256: None,
+            tree: TreeFingerprint {
+                head: None,
+                dirty_sha256: None,
+                untracked_sha256: None,
+                dirty: false,
+            },
+            started_at_ms: duration_ms,
+            duration_ms,
+            jobs: Vec::new(),
+            ok,
+            local_sufficient: true,
+            advisory: false,
+            missing_tool: None,
+            tree_changed_by_fix: false,
+            from_hook: false,
+        }
+    }
+
+    #[test]
+    fn stats_roll_up_per_profile_with_nearest_rank_percentiles() {
+        let mut fast_ok = report("fast", true, 100);
+        fast_ok.jobs = vec![JobReport {
+            id: "fmt.fix".into(),
+            argv: vec!["true".into()],
+            cwd: ".".into(),
+            exit: Some(0),
+            signal: None,
+            timed_out: false,
+            duration_ms: 1,
+            log_path: ".loom/ci/x/fmt.fix.log".into(),
+            log_sha256: "0".repeat(64),
+            fixed: false,
+        }];
+        let mut fast_bad = report("fast", false, 300);
+        fast_bad.missing_tool = Some("cargo".into());
+        fast_bad.from_hook = true;
+        let slow = report("pre-push", true, 200);
+
+        let stats = summarize(&[fast_ok, fast_bad, slow]);
+        assert_eq!(stats.runs, 3);
+        assert_eq!(stats.passed, 2);
+        assert_eq!(stats.jobs, 1);
+        assert_eq!(stats.fix_runs, 1);
+        assert_eq!(stats.missing_tool_runs, 1);
+        assert_eq!(stats.hook_runs, 1);
+        assert_eq!(stats.first_run_ms, Some(100));
+        assert_eq!(stats.last_run_ms, Some(300));
+
+        let fast = stats
+            .profiles
+            .iter()
+            .find(|entry| entry.profile == "fast")
+            .expect("fast");
+        assert_eq!(fast.runs, 2);
+        assert_eq!(fast.passed, 1);
+        assert_eq!(fast.p50_ms, 100, "nearest-rank: ceil(0.5*2)-1 = 0");
+        assert_eq!(fast.p95_ms, 300, "nearest-rank: ceil(0.95*2)-1 = 1");
+        let slow = stats
+            .profiles
+            .iter()
+            .find(|entry| entry.profile == "pre-push")
+            .expect("pre-push");
+        assert_eq!((slow.runs, slow.p50_ms, slow.p95_ms), (1, 200, 200));
+
+        assert_eq!(summarize(&[]).runs, 0);
     }
 }

@@ -26,6 +26,51 @@ pub(crate) struct DispatchArgs {
     pub timeout_s: Option<u64>,
     pub attempt: u32,
     pub in_place: bool,
+    pub allow_red_baseline: bool,
+}
+
+/// `doc/15` §4.8: `[ci] preflight = "<profile>"` runs that profile before
+/// dispatch and refuses a red baseline; `--allow-red-baseline` proceeds with
+/// a warning instead. Default `off` means this never runs. The refusal and
+/// the escape hatch both record their runs and open/close attention items
+/// through the same linkage as `loom ci run`.
+fn preflight_gate(project: &loom_store::Project, allow_red_baseline: bool) -> Result<()> {
+    let config = project.load_config()?;
+    let profile = config.ci.preflight.clone();
+    if profile == "off" {
+        return Ok(());
+    }
+    let ci_file = loom_ci::load_ci_file(&project.root)
+        .map_err(|error| anyhow::anyhow!(error))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no {} — run `loom ci plan` (or set [ci] preflight = \"off\")",
+                loom_ci::CI_CONFIG_NAME
+            )
+        })?;
+    let outcome = loom_ci::run(loom_ci::RunRequest {
+        root: &project.root,
+        file: &ci_file,
+        profile: &profile,
+        keep_going: false,
+        fix: false,
+        pre_fix: false,
+        from_hook: false,
+        now_ms: loom_store::now_ms(),
+    })?;
+    super::ci_cmd::link_attention(project, &outcome)?;
+    if outcome.exit_code == loom_ci::EXIT_OK {
+        return Ok(());
+    }
+    if allow_red_baseline {
+        eprintln!(
+            "loom: warning: baseline red ({profile}) — dispatching anyway (--allow-red-baseline)"
+        );
+        return Ok(());
+    }
+    anyhow::bail!(
+        "baseline red (profile {profile}): fix the baseline first or pass --allow-red-baseline"
+    );
 }
 
 pub(crate) struct Prepared {
@@ -217,6 +262,9 @@ pub(crate) fn dispatch(
     run_id: Option<&str>,
     format: Format,
 ) -> Result<i32> {
+    // Baseline preflight (`doc/15` §4.8): gate before any side effect.
+    preflight_gate(project, args.allow_red_baseline)?;
+
     let mut attempt = prepare(
         project,
         &args.task_id,

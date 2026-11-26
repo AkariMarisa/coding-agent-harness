@@ -31,6 +31,9 @@ pub struct RunRequest<'a> {
     /// the tree moved (`hooks_fix_safe`, `doc/16` §7.7). Never combined
     /// with `fix` — that mode is the explicit `--fix` path.
     pub pre_fix: bool,
+    /// Started by a generated git hook (recorded in the report; the CLI
+    /// layer uses the same switch for the `doc/16` §7.7 fail-open policy).
+    pub from_hook: bool,
     pub now_ms: u64,
 }
 
@@ -71,6 +74,7 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
         keep_going,
         fix,
         pre_fix,
+        from_hook,
         now_ms,
     } = request;
 
@@ -261,6 +265,7 @@ pub fn run(request: RunRequest<'_>) -> Result<RunOutcome> {
         advisory: false,
         missing_tool: missing_tool.clone(),
         tree_changed_by_fix: fixes_changed,
+        from_hook,
     };
 
     let report_path = log_dir.join("report.json");
@@ -440,6 +445,7 @@ mod tests {
             keep_going: false,
             fix: false,
             pre_fix: false,
+            from_hook: false,
             now_ms: 1_795_180_800_000,
         })
         .expect("run");
@@ -486,6 +492,7 @@ mod tests {
             keep_going: false,
             fix: false,
             pre_fix: false,
+            from_hook: false,
             now_ms: 0,
         })
         .expect("run");
@@ -499,6 +506,7 @@ mod tests {
             keep_going: true,
             fix: false,
             pre_fix: false,
+            from_hook: false,
             now_ms: 1,
         })
         .expect("run");
@@ -519,6 +527,7 @@ mod tests {
             keep_going: false,
             fix: false,
             pre_fix: false,
+            from_hook: false,
             now_ms: 0,
         })
         .expect("run");
@@ -540,6 +549,7 @@ mod tests {
             keep_going: false,
             fix: false,
             pre_fix: false,
+            from_hook: false,
             now_ms: 0,
         })
         .expect("run");
@@ -573,6 +583,7 @@ mod tests {
             keep_going: false,
             fix: true,
             pre_fix: false,
+            from_hook: false,
             now_ms: 0,
         })
         .expect("run");
@@ -612,6 +623,7 @@ mod tests {
             keep_going: false,
             fix: false,
             pre_fix: false,
+            from_hook: false,
             now_ms: 0,
         })
         .expect_err("unknown profile");
