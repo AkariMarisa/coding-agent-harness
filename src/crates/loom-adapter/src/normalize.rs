@@ -104,6 +104,11 @@ fn status_for(exit_code: i32, timed_out: bool, claim: Option<ReceiptStatus>) -> 
     if timed_out || exit_code == 3 {
         return ReceiptStatus::BudgetExceeded;
     }
+    // Exit 5: the churn watchdog stopped a gross loop. Blocked, not failed —
+    // a human inspects the loop before redispatch (`doc/15` §1.6).
+    if exit_code == 5 {
+        return ReceiptStatus::Blocked;
+    }
     match exit_code {
         4 => ReceiptStatus::Failed,
         2 => match claim {
@@ -120,6 +125,7 @@ pub fn normalize(
     request: &AdapterRequest,
     exit_code: i32,
     timed_out: bool,
+    churn: Option<&crate::watch::ChurnStop>,
     usage: Vec<AdapterUsageRow>,
 ) -> Result<Receipt> {
     let final_path = request.output_dir.join("final.md");
@@ -182,6 +188,14 @@ pub fn normalize(
     receipt.tokens = aggregate_tokens(&usage);
     receipt.decisions = Vec::new();
     receipt.blockers = Vec::new();
+    if let Some(stop) = churn {
+        // The loop evidence travels on the receipt so verify and the inbox
+        // can both see why the run stopped.
+        receipt.blockers.push(format!(
+            "churn watchdog: {} changed in {} consecutive samples ({} bytes)",
+            stop.file, stop.changes, stop.bytes_touched
+        ));
+    }
     receipt.report_path = report_path;
 
     if receipt.status == ReceiptStatus::Failed && parsed.is_none() {
@@ -192,6 +206,9 @@ pub fn normalize(
         receipt.next_hint = "adapter exit 2: needs human input".to_string();
     } else if exit_code == 3 {
         receipt.next_hint = "adapter exit 3: budget or timeout".to_string();
+    } else if exit_code == 5 {
+        receipt.next_hint =
+            "churn watchdog stopped the adapter; inspect the loop before redispatching".to_string();
     } else if exit_code == 4 {
         receipt.next_hint = "adapter exit 4: adapter failure".to_string();
     } else {
@@ -226,18 +243,44 @@ mod tests {
             max_tokens: None,
             attempt: 1,
             skills: Vec::new(),
+            churn: Default::default(),
         }
+    }
+
+    #[test]
+    fn churn_stop_maps_to_blocked_with_evidence() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let req = request(dir.path());
+        let stop = crate::watch::ChurnStop {
+            file: "src/lib.rs".to_string(),
+            changes: 5,
+            bytes_touched: 12_345,
+        };
+        let receipt = normalize(&req, 5, false, Some(&stop), vec![]).expect("normalize");
+        assert_eq!(receipt.status, ReceiptStatus::Blocked);
+        assert!(receipt
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("churn watchdog") && blocker.contains("src/lib.rs")));
+        assert!(receipt.next_hint.contains("churn watchdog"));
+
+        // Exit 5 with no detail still blocks (defensive), and plain codes
+        // are untouched.
+        let bare = normalize(&req, 5, false, None, vec![]).expect("normalize");
+        assert_eq!(bare.status, ReceiptStatus::Blocked);
+        let ok = normalize(&req, 0, false, None, vec![]).expect("normalize");
+        assert_ne!(ok.status, ReceiptStatus::Blocked);
     }
 
     #[test]
     fn maps_exit_codes_and_claims() {
         let dir = tempfile::tempdir().expect("tempdir");
         let req = request(dir.path());
-        let receipt = normalize(&req, 3, false, vec![]).expect("normalize");
+        let receipt = normalize(&req, 3, false, None, vec![]).expect("normalize");
         assert_eq!(receipt.status, ReceiptStatus::BudgetExceeded);
         assert!(!receipt.report_path.is_empty());
 
-        let receipt = normalize(&req, 4, false, vec![]).expect("normalize");
+        let receipt = normalize(&req, 4, false, None, vec![]).expect("normalize");
         assert_eq!(receipt.status, ReceiptStatus::Failed);
         assert!(receipt.next_hint.contains("adapter"));
     }
@@ -266,7 +309,7 @@ mod tests {
                 ..AdapterUsageRow::new("R-1", "T-20261104-001")
             },
         ];
-        let receipt = normalize(&req, 0, false, usage).expect("normalize");
+        let receipt = normalize(&req, 0, false, None, usage).expect("normalize");
         assert_eq!(receipt.status, ReceiptStatus::Done);
         assert_eq!(receipt.verify.len(), 1);
         assert_eq!(receipt.tokens.input, 1500);

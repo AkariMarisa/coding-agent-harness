@@ -928,4 +928,71 @@ grep -Eq '"runs": [1-9]' /work/.smoke/.loom/ci-stats.json || {
     exit 1
 }
 
+# churn watchdog (doc/15 §1.6): a gross loop in an external adapter is
+# stopped with evidence, recorded as blocked (never failed), and never
+# retried on another model. The fake `opencode` on PATH stands in for the
+# real binary — the preset only needs a command that drains stdin and then
+# loops on one file.
+mkdir -p /work/.smoke/.bin
+cat > /work/.smoke/.bin/opencode <<'FAKE_EOF'
+#!/bin/sh
+cat > /dev/null
+while :; do echo churn >> churn-loop.txt; sleep 0.005; done
+FAKE_EOF
+chmod +x /work/.smoke/.bin/opencode
+loom config set churn.changes 3 > /dev/null
+loom config set churn.interval_s 1 > /dev/null
+loom config set churn.min_age_s 0 > /dev/null
+cat > /work/.smoke/task-churn.json <<'EOF'
+{
+  "schema_version": "1.0",
+  "task_id": "T-20261106-011",
+  "goal_id": "G-20261106-smoke",
+  "title": "smoke churn watchdog task",
+  "role": "implement",
+  "tier": "worker",
+  "depends_on": [],
+  "workspace": {
+    "mode": "in_place",
+    "base_ref": "main",
+    "branch": "agent/T-20261106-011",
+    "allowed_paths": ["src/**"],
+    "forbidden_paths": []
+  },
+  "inputs": [],
+  "constraints": {"max_files_touched": 4, "no_new_dependencies": true, "style": []},
+  "acceptance": [{"id": "A1", "cmd": "true", "expect_exit": 0, "timeout_s": 30}],
+  "budget": {"max_input_tokens": 120000, "max_output_tokens": 20000, "max_steps": 25, "max_wall_s": 300, "max_cost_usd": 0.25},
+  "output": {"receipt": "4-line", "report_path": ".loom/runs/local/outbox/report.md", "required_artifacts": ["verify_log"]}
+}
+EOF
+loom task add --file /work/.smoke/task-churn.json > /dev/null
+code=0
+PATH="/work/.smoke/.bin:$PATH" loom dispatch T-20261106-011 --adapter opencode --in-place --allow-red-baseline > /dev/null 2>&1 || code=$?
+test -f /work/.smoke/churn-loop.txt || {
+    echo "the fake external adapter never ran" >&2
+    exit 1
+}
+receipt=$(ls -t /work/.smoke/.loom/runs/*/outbox/receipt.json | head -1)
+grep -q '"status": "blocked"' "$receipt" || {
+    echo "expected a blocked receipt from the churn stop-loss" >&2
+    exit 1
+}
+grep -q 'churn watchdog' "$receipt" || {
+    echo "expected churn evidence on the receipt" >&2
+    exit 1
+}
+# Exit 5 is not an availability failure: a stop-loss must not be retried
+# on another model (that may just loop again).
+if loom event list --task T-20261106-011 --format json | grep -q 'task.fallback'; then
+    echo "a churn stop-loss must not trigger a model fallback" >&2
+    exit 1
+fi
+# The inbox gets a blocking operation item, keyed with the shared blocked
+# linkage so a later verify folds into it instead of duplicating.
+loom inbox --kind operation --format json | grep -q '"dedupe_key": "task:T-20261106-011:blocked"' || {
+    echo "expected a blocking churn item in the inbox" >&2
+    exit 1
+}
+
 echo "SMOKE_OK"

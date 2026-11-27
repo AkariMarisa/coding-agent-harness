@@ -10,11 +10,13 @@ mod normalize;
 mod preset;
 mod process;
 mod types;
+mod watch;
 
 pub use canary::{canary, CanaryCheck, CanaryReport};
 pub use normalize::{git_diffstat, git_head, read_usage_rows};
 pub use preset::{list, preset, which, AdapterPreset};
 pub use types::{AdapterKind, AdapterRequest, AdapterRun, AdapterUsageRow, ADAPTER_USAGE_VERSION};
+pub use watch::ChurnStop;
 
 use std::fs;
 use std::time::Instant;
@@ -40,6 +42,7 @@ pub(crate) fn run_with_mode(request: &AdapterRequest, mode: MockMode) -> Result<
                 duration_ms: started.elapsed().as_millis() as u64,
                 stdout_path: request.logs_dir.join("adapter.stdout.log"),
                 stderr_path: request.logs_dir.join("adapter.stderr.log"),
+                churn: None,
             }
         }
         _ => process::execute(request)?,
@@ -47,8 +50,13 @@ pub(crate) fn run_with_mode(request: &AdapterRequest, mode: MockMode) -> Result<
 
     let usage_path = request.output_dir.join("usage.jsonl");
     let usage = normalize::read_usage_rows(&usage_path)?;
-    let receipt: Receipt =
-        normalize::normalize(request, outcome.exit_code, outcome.timed_out, usage.clone())?;
+    let receipt: Receipt = normalize::normalize(
+        request,
+        outcome.exit_code,
+        outcome.timed_out,
+        outcome.churn.as_ref(),
+        usage.clone(),
+    )?;
 
     fs::create_dir_all(&request.output_dir).context("create outbox")?;
     let text = serde_json::to_string_pretty(&receipt)?;
@@ -64,5 +72,6 @@ pub(crate) fn run_with_mode(request: &AdapterRequest, mode: MockMode) -> Result<
         stderr_path: outcome.stderr_path,
         receipt,
         usage,
+        churn: outcome.churn,
     })
 }

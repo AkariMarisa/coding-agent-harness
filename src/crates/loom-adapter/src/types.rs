@@ -63,6 +63,8 @@ pub struct AdapterRequest {
     /// loader (opencode) additionally get `@skill-id` mentions
     /// (`doc/15` §12.3) — one field, two consumers.
     pub skills: Vec<String>,
+    /// Coarse churn-watchdog knobs for this run (`doc/15` §1.6).
+    pub churn: loom_core::ChurnConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +199,8 @@ pub struct AdapterRun {
     pub stderr_path: PathBuf,
     pub receipt: loom_core::Receipt,
     pub usage: Vec<AdapterUsageRow>,
+    /// Set when the churn watchdog stopped a gross loop (`doc/15` §1.6).
+    pub churn: Option<crate::watch::ChurnStop>,
 }
 
 impl AdapterRun {
@@ -218,6 +222,15 @@ fn availability_failure(exit_code: i32, timed_out: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn churn_exit_five_is_not_an_availability_failure() {
+        // A watchdog stop-loss must not trigger a model fallback: restarting
+        // on another alias may just loop again (`doc/15` §1.6).
+        assert!(!availability_failure(5, false));
+        assert!(availability_failure(4, false), "crashes still retry");
+        assert!(availability_failure(0, true), "timeouts still retry");
+    }
+
     use super::availability_failure;
 
     #[test]

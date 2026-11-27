@@ -25,6 +25,8 @@ pub struct Config {
     pub attention: AttentionConfig,
     /// Local CI preferences (`doc/15` §4.5).
     pub ci: CiConfig,
+    /// External-adapter churn watchdog (`doc/15` §1.6).
+    pub churn: ChurnConfig,
 }
 
 /// M4 starts at 2 parallel workers; 3+ needs an A/B showing WPT/CPVT do not
@@ -57,6 +59,7 @@ impl Default for Config {
             parallel: ParallelConfig::default(),
             attention: AttentionConfig::default(),
             ci: CiConfig::default(),
+            churn: ChurnConfig::default(),
         }
     }
 }
@@ -115,6 +118,36 @@ impl Default for CiConfig {
             hooks_fix_safe: false,
             hooks_fail_open: true,
             preflight: "off".to_string(),
+        }
+    }
+}
+
+/// The coarse stop-loss for external adapters (`doc/15` §1.6): Loom does not
+/// own their conversation, so the watchdog only terminates a *gross* loop —
+/// the same file changed in `changes` consecutive samples, sustained for at
+/// least `min_age_s` — where continuation clearly costs more than a restart.
+/// Conservative by default: restarting an external agent may re-read the
+/// whole repository, so near-misses are left alone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChurnConfig {
+    /// Master switch for the external-adapter watchdog.
+    pub watchdog: bool,
+    /// Consecutive samples in which one file must keep changing.
+    pub changes: u32,
+    /// Seconds between workspace samples.
+    pub interval_s: u64,
+    /// Minimum run age before the watchdog may fire at all.
+    pub min_age_s: u64,
+}
+
+impl Default for ChurnConfig {
+    fn default() -> Self {
+        Self {
+            watchdog: true,
+            changes: 5,
+            interval_s: 5,
+            min_age_s: 60,
         }
     }
 }
@@ -213,6 +246,21 @@ impl Config {
                     "ci.preflight must be off|fast, got {other}"
                 )));
             }
+        }
+        if self.churn.changes < 2 {
+            return Err(ConfigError::Validation(
+                "churn.changes must be >= 2".to_string(),
+            ));
+        }
+        if !(1..=3600).contains(&self.churn.interval_s) {
+            return Err(ConfigError::Validation(
+                "churn.interval_s must be 1..=3600".to_string(),
+            ));
+        }
+        if self.churn.min_age_s > 86_400 {
+            return Err(ConfigError::Validation(
+                "churn.min_age_s must be <= 86400".to_string(),
+            ));
         }
         Ok(())
     }
@@ -732,6 +780,34 @@ base_url = "https://b.example"
         ));
         fs::write(&path, "[ci]\npreflight = \"fast\"\n").expect("write");
         assert_eq!(Config::load(&path).expect("load").ci.preflight, "fast");
+
+        // [churn] watchdog knobs: conservative defaults, validated ranges.
+        let churn = Config::default().churn;
+        assert!(churn.watchdog);
+        assert_eq!(
+            (churn.changes, churn.interval_s, churn.min_age_s),
+            (5, 5, 60)
+        );
+        fs::write(&path, "[churn]\nchanges = 1\n").expect("write");
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Validation(_))
+        ));
+        fs::write(&path, "[churn]\ninterval_s = 0\n").expect("write");
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Validation(_))
+        ));
+        fs::write(
+            &path,
+            "[churn]\nchanges = 3\ninterval_s = 2\nmin_age_s = 0\n",
+        )
+        .expect("write");
+        let churn = Config::load(&path).expect("load").churn;
+        assert_eq!(
+            (churn.changes, churn.interval_s, churn.min_age_s),
+            (3, 2, 0)
+        );
     }
 
     #[test]

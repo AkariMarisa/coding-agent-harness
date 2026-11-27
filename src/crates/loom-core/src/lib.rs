@@ -26,7 +26,8 @@ pub use attention::{
 };
 pub use capability::{find_model, ModelCapability, ReasoningPassthrough, ThinkingMode, Tier, Wire};
 pub use config::{
-    apply_config_set, parse_config_value, Config, ConfigError, ParallelConfig, ToolsConfig,
+    apply_config_set, parse_config_value, ChurnConfig, Config, ConfigError, ParallelConfig,
+    ToolsConfig,
 };
 pub use envelope::{
     Budget, BudgetLevel, Envelope, ErrorCode, Item, ItemKind, ItemType, Stats, ToolError, ToolName,

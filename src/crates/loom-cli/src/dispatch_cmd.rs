@@ -229,6 +229,10 @@ fn prepare_attempt(
         timeout_s: timeout,
         max_tokens: Some(spec.budget.max_output_tokens),
         skills: spec.skills.clone(),
+        churn: project
+            .load_config()
+            .map(|config| config.churn)
+            .unwrap_or_default(),
     };
 
     let base_sha = git_head(&workspace).unwrap_or_default();
@@ -536,8 +540,40 @@ pub(crate) fn dispatch(
                 ("head_sha".to_string(), json!(run_result.receipt.head_sha)),
                 ("exit".to_string(), json!(run_result.exit_code)),
                 ("timed_out".to_string(), json!(run_result.timed_out)),
+                ("blockers".to_string(), json!(run_result.receipt.blockers)),
             ]),
         )?;
+        if let Some(stop) = &run_result.churn {
+            // `doc/15` §1.6 + §2.2: a watchdog stop-loss is a resident
+            // `operation` item — blocking, because the work stops until a
+            // human inspects the loop. The dedupe key matches the
+            // verify-side blocked item, so the two fold into one.
+            loom_store::open_item(
+                project,
+                &loom_store::NewItem {
+                    run_id: attempt.run.id.clone(),
+                    task_id: Some(attempt.spec.task_id.clone()),
+                    kind: loom_core::AttentionKind::Operation,
+                    source: loom_core::AttentionSource::Env,
+                    severity: loom_core::Severity::Blocking,
+                    dedupe_key: format!("task:{}:blocked", attempt.spec.task_id),
+                    title: format!(
+                        "task {} stopped: churn loop on {}",
+                        attempt.spec.task_id, stop.file
+                    ),
+                    detail: Some(format!(
+                        "{} changed in {} consecutive samples ({} bytes) — inspect the loop before redispatching",
+                        stop.file, stop.changes, stop.bytes_touched
+                    )),
+                    refs: Vec::new(),
+                    actions: vec![loom_core::AttentionAction {
+                        id: "show".to_string(),
+                        label: "Show task".to_string(),
+                        cmd: format!("loom task show {}", attempt.spec.task_id),
+                    }],
+                },
+            )?;
+        }
         sync_index(project)?;
 
         // Only executor failures are worth another model: a task that ran and

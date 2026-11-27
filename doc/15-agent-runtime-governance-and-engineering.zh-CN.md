@@ -186,6 +186,8 @@ patch 的收益是双重的：output 变少，进入历史的 payload 也变小�
 
 ### 1.6 外部 adapter
 
+> 状态：**看门狗已实现（2026-11-27）** —— `ChurnWatch` 每 `churn.interval_s` 采样工作树（`.git`/`.loom`/`.worktrees` 永不采样）；同一文件在 `churn.changes` 个**连续**样本中持续变化（空闲样本会清零计数）且持续至少 `churn.min_age_s` 才算粗循环。此时终止 adapter 进程，运行记为 exit 5 → 回执 `blocked` 并携带 `churn watchdog: …` blocker——绝不是 `failed`，也绝不触发模型 fallback（exit 5 不是可用性故障，重试只可能再循环一次）。dispatch 同步开一个 blocking `operation` 事项、键为 `task:<id>:blocked`（verify 侧的 blocked 事项会折叠进来），人检查后再重新派发。默认保守：`[churn]` = `watchdog true, changes 5, interval_s 5, min_age_s 60`。离线测试覆盖采样语义与真实子进程终止；smoke 用假外部 adapter 走完整 dispatch 路径。§1.6 的另一半——写进 adapter prompt 的 patch-first 提示——不自动化。
+
 外部 agent 拥有自己的会话历史，Loom 无法逐步投影。能做的只有：
 
 - 在 adapter prompt / 配置里要求 patch-first、最小 diff、上下文上限（如果 adapter 支持）；

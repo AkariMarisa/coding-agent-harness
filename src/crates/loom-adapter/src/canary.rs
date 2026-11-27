@@ -265,6 +265,7 @@ fn build_mock_request(dir: &Path) -> AdapterRequest {
         timeout_s: 10,
         max_tokens: None,
         skills: spec.skills.clone(),
+        churn: Default::default(),
     }
 }
 

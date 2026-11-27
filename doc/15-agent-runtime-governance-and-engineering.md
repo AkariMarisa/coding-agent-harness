@@ -186,6 +186,8 @@ Explicit: **L2 is not the main mechanism**. Its value is "preventing the next fu
 
 ### 1.6 External adapters
 
+> Status: **watchdog implemented (2026-11-27)** — `ChurnWatch` samples the worktree (`.git`/`.loom`/`.worktrees` never sampled) every `churn.interval_s`; one file changed in `churn.changes` **consecutive** samples (an idle sample resets the count) for at least `churn.min_age_s` is a gross loop. The adapter process is then killed and the run records exit 5 → receipt `blocked` with a `churn watchdog: …` blocker — never `failed`, and never a model fallback (exit 5 is not an availability failure, so a retry cannot just loop again). Dispatch opens a blocking `operation` item keyed `task:<id>:blocked` (the verify-side blocked item folds into it), so a human inspects before redispatch. Conservative by design: `[churn]` defaults `watchdog = true, changes = 5, interval_s = 5, min_age_s = 60`. Offline tests cover the sampler semantics and killing real child processes; the smoke drives a fake external adapter through the whole dispatch path. Prompt-level rules (patch-first hints in the adapter prompt) remain the other half of §1.6 and are not automated.
+
 External agents own their own conversation history, so Loom cannot project step by step. The only things we can do:
 
 - require patch-first, minimal diff, and context caps in the adapter prompt / configuration (if the adapter supports them);
