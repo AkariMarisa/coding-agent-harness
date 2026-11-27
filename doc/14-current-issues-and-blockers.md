@@ -10,7 +10,7 @@
 ## 1. Conclusion
 
 - The M0/M1/M2 code loop is closed and passing; M3 control-plane routing has landed.
-- The real gap is not code but **environment and real traffic**: the container has no goose/OpenCode/LiteLLM, and no provider API key or bill, so the external adapter canary, native vs adapter A/B, and CPVT calibration cannot be completed yet.
+- The real gap is not code but **environment and real traffic**: the container now carries `goose` + `opencode` (installed 2026-11-27 via `scripts/fetch-adapter-binaries.sh` + image `COPY`; contract canaries green), but LiteLLM and provider API keys/bills are still absent, so the *live* external adapter canary, native vs adapter A/B, and CPVT calibration cannot be completed yet.
 - So today we can say "the routing protocol works"; we cannot say "the M3 exit criteria are met".
 
 ---
@@ -19,20 +19,20 @@
 
 | Blocker | Impact | Status / workaround |
 |---|---|---|
-| No `goose` in the container | cannot run a real goose adapter canary; M1/M2's "real external adapter" exit criteria are dangling | only mock/native so far; add the binary to the image or mount it |
-| No `opencode` in the container | cannot run a second external adapter canary | the host has `/usr/bin/opencode`, but the container cannot see it |
+| No `goose` in the container | cannot run a real goose adapter canary; M1/M2's "real external adapter" exit criteria are dangling | ✅ resolved 2026-11-27: pinned v1.61.1 fetched by `scripts/fetch-adapter-binaries.sh` (sha256-verified) and COPYed into the image; contract canary green |
+| No `opencode` in the container | cannot run a second external adapter canary | ✅ resolved 2026-11-27: pinned v1.19.6 glibc build installed the same way (the release's "musl" asset is dynamically linked against a loader neither the host nor the image has); contract canary green. Host `/usr/bin/opencode` v2.4.2 stays host-only |
 | No LiteLLM service in the container | M3's LiteLLM routing, usage logs, and bill reconciliation cannot be verified in place | only design so far; routing can first be verified with native direct connection to an OpenAI-compatible endpoint |
 | No provider API key | cannot run real models, real usage, real failure distributions | offline tests uniformly use the `LOOM_NATIVE_SCRIPT` scripted provider |
 | No provider bill/usage export | `cost_source=provider` cannot be measured for real; costs can only be estimated from a price table | local estimates are tagged `pricing_table`, unknown prices tagged `unknown` |
 | The subscription lane needs the account holder to sign in | subscription vs API quota / rate-limit comparison cannot be automated | deferred by design; does not block M0–M3 |
 
-> The container build only guarantees Rust + git; `curl` is not in the image either. For verifications involving the network or external binaries, first extend the image or mount explicitly, then talk about "canary passed".
+> The container build only guarantees Rust + git; `curl` is not in the image (the adapter-binary fetch runs on the host, sha256-pinned, and the build stays offline). For verifications involving the network, extend the image or mount explicitly first, then talk about "canary passed".
 
 ---
 
 ## 3. M2 unclosed items
 
-1. **Real goose / OpenCode canary**: passing mock/native does not mean the external adapter contract passes. Once the binaries exist, re-run `loom adapter canary <kind> --live --task ...`.
+1. **Real goose / OpenCode canary**: contract canaries (non-live: availability + version) are green for both adapters since 2026-11-27; the live half — `loom adapter canary <kind> --live --task ...` — still needs provider keys and a bill.
 2. **native vs adapter A/B**: needs the same task set, real models, identical budgets, compared by CPVT/TPVT/wall clock; no baseline data yet.
 3. **Cost budget calibration**: `ModelCapability::estimate_cost` is only a local price-table estimate; real bills may include cache writes, reasoning, tiered prices, and time-band discounts — not yet reconciled.
 4. **Long-term effect of failure packets**: acceptance feedback within a run and the previous run's `FailurePack` are implemented, but there is no "with failure packet vs without" comparison of CPVT / first-pass rate.
@@ -131,7 +131,7 @@ Conclusion: wall shortens nearly linearly (3-way parallel is 54% faster than ser
 
 ## 7. Suggested order
 
-1. Extend the container image: `goose`, `opencode` (or mount them), `curl`, optional LiteLLM.
+1. ~~Extend the container image~~ — done for `goose` + `opencode` (2026-11-27); `curl` and optional LiteLLM are still absent.
 2. Get GPT + DeepSeek API keys, first run a native-only A/B on a fixed task set to confirm routing and cost accounting.
 3. Then run the real goose/OpenCode canary, and only then claim the M1/M2 exit criteria are complete.
 4. 2-way parallel is ready (locks + merge queue + measured with `scripts/smoke-parallel.sh`); 3-way parallel still needs A/B proof that `WPT`/`CPVT` do not regress before enabling.
@@ -143,12 +143,12 @@ Same-tier fallback and `loom route stats` are complete and no longer on the todo
 
 ## 8. New findings from 2026-11-07 (design drafts)
 
-The following items have recorded designs but are **not implemented**; details in [15-agent-runtime-governance-and-engineering.md](15-agent-runtime-governance-and-engineering.md):
+The following items were recorded as design drafts on 2026-11-07; most have since landed — current state as of 2026-11-27, details in [15-agent-runtime-governance-and-engineering.md](15-agent-runtime-governance-and-engineering.md):
 
-1. **churn**: step-level projection + patch-first/write guard + step-level token attribution are implemented; still missing are L1–L3 tiered intervention and cost-aware restart (automatic projection only triggers on a byte threshold, not on "Nth rewrite").
-2. **blocking on questions and visibility of human items**: `needs_input` is no longer recorded as `task.failed`; but external agents can still hang waiting on stdin, and questions/approvals/operations/reviews still lack a persistent attention inbox.
-3. **skills governance**: an unverified skill cannot be installed globally; needs repo profiling, an offline catalog, on-demand loading, static checks, and promotion after evaluation; CI review/check templates are its early landing spot.
-4. **local CI is absent**: `loom init` only creates a skeleton; it does not probe the tech stack, nor generate acceptance/CI; checks like format, lint, review, and commit messages that could be resolved locally still depend on the server, and agents lack a unified local feedback loop.
+1. **churn**: step-level projection + patch-first/write guard + step-level token attribution are implemented, and since 2026-11-27 the **external-adapter churn watchdog** too (same file changed in N consecutive samples → kill → receipt `blocked`, never a model fallback). Still missing: L1–L3 tiered intervention and cost-aware restart (automatic projection only triggers on a byte threshold, not on "Nth rewrite").
+2. **blocking on questions and visibility of human items**: ✅ resolved — `needs_input` no longer records as `task.failed`, and the persistent attention inbox landed (`attention.*` events → `.loom/inbox.json` → `loom inbox`, opened by `task.needs_input`, resolved by `loom answer`). Remaining: external agents can still hang waiting on stdin (the §2.6 hang watchdog of doc/15 is not built).
+3. **skills governance**: ✅ resolved (2026-11-27) — stack profiling (`loom skill scan/recommend`), tracked offline catalog + lock, index-only packets with on-demand bodies, static checks (`verify` L0 + `scripts/check-skills.sh` CI job). Still missing: L2 evaluation/promotion, `loom skill stats`, and the networked catalog.
+4. **local CI**: ✅ resolved (2026-11-27) — `.loom.ci.toml` + `loom ci plan/run/doctor/report/verify-attest`, stack detection with evidence, env allowlist, process-group timeouts, git hooks with fail-open, `loom ci stats`, and the `[ci] preflight` gate. Still missing: L1–L3 graded intervention linkage, CI review/skill jobs, and attestation signing / server-side skipping.
 5. **the adoption assessment is complete**: integration points based on the current code, contract changes, phased person-days, and risks are in [16-runtime-governance-adoption-assessment.md](16-runtime-governance-adoption-assessment.md). It confirms three designs that must be fixed first: the CI config should be named `.loom.ci.toml`, live at the target project root, and be version-controlled (it is project policy, not `.loom/` runtime state); local attestation cannot authorize the server to skip CI in v1; `verify` must first stop overwriting claim receipts and stop writing `needs_input`/`blocked`/`budget_exceeded` as `task.failed`.
 
 ## 9. First battle on a real repo (2026-11-08, tumblr-downloader / issue #24)

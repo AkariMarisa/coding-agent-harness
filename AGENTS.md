@@ -140,7 +140,7 @@ Done work lives with the design docs, not here: per-subsystem implementation sta
 
 Next:
 
-1. container image/mounts for goose, opencode, curl, optional LiteLLM;
+1. ~~container image/mounts for goose, opencode~~ — done (2026-11-27, `scripts/fetch-adapter-binaries.sh` + image `COPY`, contract canaries green); curl and optional LiteLLM still missing;
 2. real goose/OpenCode adapter canary (requires installed binaries);
 3. native vs adapter A/B (same task set, by CPVT/TPVT/wall-clock);
 4. calibrate `tool_output_ratio` / `spill_rate` / cost estimates against a real repository;

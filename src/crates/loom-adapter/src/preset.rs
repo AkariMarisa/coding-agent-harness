@@ -112,7 +112,7 @@ impl AdapterPreset {
         if self.kind == AdapterKind::Mock {
             return true;
         }
-        let executable = self.resolve_executable();
+        let executable = self.probe_executable();
         if executable.contains('/') {
             return Path::new(&executable).is_file();
         }
@@ -141,8 +141,21 @@ impl AdapterPreset {
         self.executable.to_string()
     }
 
+    /// What to probe for availability and `--version`: a custom resolved
+    /// path wins (native's `LOOM_NATIVE_BIN`); otherwise the real tool, not
+    /// a wrapper — the opencode preset execs through `sh -c`, but its
+    /// version comes from `opencode` itself.
+    pub fn probe_executable(&self) -> String {
+        let resolved = self.resolve_executable();
+        if resolved.contains('/') {
+            resolved
+        } else {
+            self.check_executable.to_string()
+        }
+    }
+
     pub fn version_command(&self) -> (String, Vec<String>) {
-        (self.resolve_executable(), vec!["--version".to_string()])
+        (self.probe_executable(), vec!["--version".to_string()])
     }
 }
 

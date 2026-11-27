@@ -6,6 +6,11 @@
 # Local tool cache (mounted into the dev container)
 /.cache/
 
+# External-adapter binaries (fetched by scripts/fetch-adapter-binaries.sh,
+# COPYed into the image; never committed)
+/container/bin/*
+!/container/bin/.gitkeep
+
 # Loom runtime state (per project, never committed)
 /.worktrees/
 /.smoke/

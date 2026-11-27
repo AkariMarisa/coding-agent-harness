@@ -995,4 +995,16 @@ loom inbox --kind operation --format json | grep -q '"dedupe_key": "task:T-20261
     exit 1
 }
 
+# adapter contract canaries (doc/14): run whenever the image carries the
+# binaries — scripts/fetch-adapter-binaries.sh then an image rebuild; images
+# built without them skip this instead of failing.
+for adapter in opencode goose; do
+    if command -v "$adapter" > /dev/null 2>&1; then
+        loom adapter canary "$adapter" --format json | grep -q '"ok": true' || {
+            echo "adapter canary $adapter failed" >&2
+            exit 1
+        }
+    fi
+done
+
 echo "SMOKE_OK"

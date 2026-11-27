@@ -10,7 +10,7 @@
 ## 1. 结论
 
 - M0/M1/M2 的代码闭环已跑通；M3 控制面路由已落地。
-- 真正的缺口不在代码，而在**环境与真实流量**：容器内没有 goose/OpenCode/LiteLLM，也没有 provider API key 与账单，所以外部 adapter canary、native vs adapter A/B、CPVT 校准都还无法完成。
+- 真正的缺口不在代码，而在**环境与真实流量**：容器自 2026-11-27 起已带 `goose` + `opencode`（`scripts/fetch-adapter-binaries.sh` + 镜像 `COPY` 安装，契约 canary 全绿），但 LiteLLM 与 provider API key/账单仍缺，所以*live* 外部 adapter canary、native vs adapter A/B、CPVT 校准还无法完成。
 - 因此当前可以说“路由协议可用了”，不能说“M3 退出标准已满足”。
 
 ---
@@ -19,20 +19,20 @@
 
 | 卡点 | 影响 | 现状/绕过 |
 |---|---|---|
-| 容器内没有 `goose` | 无法跑真实 goose adapter canary；M1/M2 的“真实外部 adapter”退出标准悬空 | 只跑过 mock/native；需把二进制加入镜像或挂载 |
-| 容器内没有 `opencode` | 无法跑第二个外部 adapter canary | 宿主机有 `/usr/bin/opencode`，但容器不可见 |
+| 容器内没有 `goose` | 无法跑真实 goose adapter canary；M1/M2 的“真实外部 adapter”退出标准悬空 | ✅ 2026-11-27 解决：pin v1.61.1 由 `scripts/fetch-adapter-binaries.sh` 下载（sha256 校验）并 COPY 进镜像；契约 canary 绿 |
+| 容器内没有 `opencode` | 无法跑第二个外部 adapter canary | ✅ 2026-11-27 解决：pin v1.19.6 glibc 版同法安装（release 的 "musl" 资产动态链接到宿主与镜像都没有的 loader）；契约 canary 绿。宿主 `/usr/bin/opencode` v2.4.2 仍只在宿主 |
 | 容器内没有 LiteLLM 服务 | M3 的 LiteLLM 路由、usage 日志、账单对账无法现场验证 | 只保留设计；可先用 native 直连 OpenAI-compatible 做路由验证 |
 | 没有 provider API key | 无法跑真实模型、真实 usage、真实失败分布 | 离线测试统一用 `LOOM_NATIVE_SCRIPT` 脚本化 provider |
 | 没有 provider 账单/usage 导出 | `cost_source=provider` 无法实测；成本只能用价格表估算 | 本地估算统一标 `pricing_table`，未知价格标 `unknown` |
 | 订阅 lane 需要账号持有人登录 | 订阅 vs API 的额度/限流对比无法自动化 | 按设计后置，不阻塞 M0–M3 |
 
-> 容器构建只保证 Rust + git；`curl` 也不在镜像里。涉及网络或外部二进制的验证，先补镜像或显式挂载，再谈“canary 通过”。
+> 容器构建只保证 Rust + git；`curl` 不在镜像里（adapter 二进制的 fetch 在宿主执行、sha256 pin，构建保持离线）。涉及网络的验证，先补镜像或显式挂载，再谈“canary 通过”。
 
 ---
 
 ## 3. M2 未闭环项
 
-1. **真实 goose / OpenCode canary**：mock/native 通过不等于外部 adapter 契约通过。需要二进制后重跑 `loom adapter canary <kind> --live --task ...`。
+1. **真实 goose / OpenCode canary**：契约 canary（非 live：available + version）自 2026-11-27 起对两个 adapter 全绿；live 半边——`loom adapter canary <kind> --live --task ...`——仍需 provider key 与账单。
 2. **native vs adapter A/B**：需要同一任务集、真实模型、相同预算，按 CPVT/TPVT/墙钟比较；当前没有基线数据。
 3. **成本预算校准**：`ModelCapability::estimate_cost` 只是本地价格表估算；真实账单可能含缓存写、reasoning、阶梯价、时段折扣，尚未对账。
 4. **失败包长期效果**：同一 run 内 acceptance 回灌与上一 run `FailurePack` 已实现，但还没有“带失败包 vs 不带失败包”的 CPVT/首过率对比。
@@ -131,7 +131,7 @@ make check
 
 ## 7. 建议顺序
 
-1. 补容器镜像：`goose`、`opencode`（或挂载）、`curl`、可选 LiteLLM。
+1. ~~补容器镜像~~ —— `goose` + `opencode` 已完成（2026-11-27）；`curl` 与可选 LiteLLM 仍缺。
 2. 拿到 GPT + DeepSeek API key，先跑固定任务集的 native-only A/B，确认路由与成本口径。
 3. 再跑真实 goose/OpenCode canary，最后才宣称 M1/M2 退出标准完成。
 4. 2 并行已具备（锁 + 合并队列 + `scripts/smoke-parallel.sh` 实测）；3 并行仍需 A/B 证明 `WPT`/`CPVT` 不退化后再开。
@@ -143,12 +143,12 @@ make check
 
 ## 8. 2026-11-07 新发现（设计稿）
 
-以下四项已记录设计，但**未实现**，详见 [15-agent-runtime-governance-and-engineering.zh-CN.md](15-agent-runtime-governance-and-engineering.zh-CN.md)：
+以下各项是 2026-11-07 记录的设计稿；多数已落地——截至 2026-11-27 的现状，详见 [15-agent-runtime-governance-and-engineering.zh-CN.md](15-agent-runtime-governance-and-engineering.zh-CN.md)：
 
-1. **写入抖动**：步骤级投影 + patch-first/write 守卫 + 步骤级 token 归因已实现；仍未做的是 L1–L3 分级干预与成本感知重启（自动投影只按字节阈值触发，不按“第 N 次重写”触发）。
-2. **提问阻塞与人工事项可见性**：`needs_input` 不再被记成 `task.failed`；但外部 agent 仍可能挂起等 stdin，问题/审批/操作/复核仍缺少常驻 attention inbox。
-3. **skills 治理**：未验证 skill 不能全局安装；需要仓库画像、离线目录、按需加载、静态检查与评估后晋升；CI review/检查模板是其早期落点。
-4. **本地 CI 缺位**：`loom init` 只建骨架，不探测技术栈、不生成 acceptance/CI；格式、lint、review、提交信息等本可本地解决的检查仍依赖服务器，agent 也缺少统一的本地反馈回路。
+1. **写入抖动**：步骤级投影 + patch-first/write 守卫 + 步骤级 token 归因已实现，2026-11-27 起**外部 adapter churn 看门狗**也已实现（同一文件连续 N 个采样变化 → 终止 → 回执 `blocked`，绝不触发模型 fallback）。仍未做：L1–L3 分级干预与成本感知重启（自动投影只按字节阈值触发，不按“第 N 次重写”触发）。
+2. **提问阻塞与人工事项可见性**：✅ 已解决——`needs_input` 不再记成 `task.failed`，常驻 attention inbox 已落地（`attention.*` 事件 → `.loom/inbox.json` → `loom inbox`，由 `task.needs_input` 打开、`loom answer` 解决）。剩余：外部 agent 仍可能挂起等 stdin（doc/15 §2.6 的 hang 看门狗未建）。
+3. **skills 治理**：✅ 已解决（2026-11-27）——技术栈画像（`loom skill scan/recommend`）、入库的离线目录 + lock、仅索引 packet（正文按需）、静态检查（`verify` L0 + `scripts/check-skills.sh` CI 作业）。仍未做：L2 评估后晋升、`loom skill stats`、联网目录。
+4. **本地 CI**：✅ 已解决（2026-11-27）——`.loom.ci.toml` + `loom ci plan/run/doctor/report/verify-attest`、带证据的技术栈探测、env 白名单、进程组超时、fail-open git hooks、`loom ci stats`、`[ci] preflight` 门。仍未做：L1–L3 分级干预联动、CI review/skill 作业、attestation 签名 / 服务器跳过。
 5. **落地评估已完成**：基于当前代码的接入点、契约变更、分期人日与风险见 [16-runtime-governance-adoption-assessment.zh-CN.md](16-runtime-governance-adoption-assessment.zh-CN.md)。其中确认了三处必须先修正的设计：CI 配置应命名为 `.loom.ci.toml`、放在目标项目根目录并纳入版本控制（它是项目策略，不是 `.loom/` 运行时状态）；本地 attestation 在 v1 不能授权服务器跳过 CI；`verify` 必须先停止覆盖 claim 回执，并停止把 `needs_input`/`blocked`/`budget_exceeded` 写成 `task.failed`。
 
 ## 9. 真实仓库首战（2026-11-08，tumblr-downloader / issue #24）

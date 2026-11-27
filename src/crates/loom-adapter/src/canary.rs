@@ -59,9 +59,9 @@ pub fn canary(
         "available",
         available,
         if available {
-            format!("{} found", preset.resolve_executable())
+            format!("{} found", preset.probe_executable())
         } else {
-            format!("{} not found", preset.check_executable)
+            format!("{} not found", preset.probe_executable())
         },
     )];
 
